@@ -1,0 +1,111 @@
+openapi: 3.0.0
+info:
+  title: Streaming API
+  description: API for the Streaming Aggregator
+  version: 0.0.1
+servers:
+  - url: http://localhost:3000
+    description: Local development server
+paths:
+  /:
+    get:
+      summary: Health check
+      responses:
+        '200':
+          description: OK
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: Hello World!
+  /movies/trending:
+    get:
+      summary: Get trending movies
+      tags:
+        - Movies
+      responses:
+        '200':
+          description: List of trending movies
+  /movies/search:
+    get:
+      summary: Search movies
+      tags:
+        - Movies
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Search query
+      responses:
+        '200':
+          description: Search results
+  /movies/{id}:
+    get:
+      summary: Get movie details
+      tags:
+        - Movies
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: Movie ID
+      responses:
+        '200':
+          description: Movie details
+  /streams/{id}:
+    get:
+      summary: Get streams (Query Parameters)
+      tags:
+        - Streams
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: IMDb ID or equivalent
+        - name: season
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+          description: Season number
+        - name: episode
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+          description: Episode number
+      responses:
+        '200':
+          description: Stream links
+  /streams/{id}/{season}/{episode}:
+    get:
+      summary: Get streams (Nested Path)
+      tags:
+        - Streams
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: season
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: episode
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Stream links

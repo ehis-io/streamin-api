@@ -1,0 +1,194 @@
+{
+	"info": {
+		"_postman_id": "f5e9c6b1-4d7a-4b92-8e1d-3c2b1a098765",
+		"name": "Streaming API",
+		"description": "Collection for the Streaming Aggregator API",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "Movies",
+			"item": [
+				{
+					"name": "Trending Movies",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/movies/trending",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"movies",
+								"trending"
+							]
+						},
+						"description": "Get trending movies"
+					},
+					"response": []
+				},
+				{
+					"name": "Search Movies",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/movies/search?q=Inception",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"movies",
+								"search"
+							],
+							"query": [
+								{
+									"key": "q",
+									"value": "Inception",
+									"description": "Search query"
+								}
+							]
+						},
+						"description": "Search for movies by title"
+					},
+					"response": []
+				},
+				{
+					"name": "Movie Details",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/movies/:id",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"movies",
+								":id"
+							],
+							"variable": [
+								{
+									"key": "id",
+									"value": "1",
+									"description": "Movie ID"
+								}
+							]
+						},
+						"description": "Get detailed information about a movie"
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Streams",
+			"item": [
+				{
+					"name": "Get Streams (Query Param)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/streams/:id?season=1&episode=1",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"streams",
+								":id"
+							],
+							"query": [
+								{
+									"key": "season",
+									"value": "1",
+									"description": "Season number (optional)"
+								},
+								{
+									"key": "episode",
+									"value": "1",
+									"description": "Episode number (optional)"
+								}
+							],
+							"variable": [
+								{
+									"key": "id",
+									"value": "tt1234567",
+									"description": "IMDb ID or equivalent"
+								}
+							]
+						},
+						"description": "Get stream links for a movie or TV show using query parameters"
+					},
+					"response": []
+				},
+				{
+					"name": "Get Streams (Nested Path)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/streams/:id/:season/:episode",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"streams",
+								":id",
+								":season",
+								":episode"
+							],
+							"variable": [
+								{
+									"key": "id",
+									"value": "tt1234567",
+									"description": "IMDb ID or equivalent"
+								},
+								{
+									"key": "season",
+									"value": "1",
+									"description": "Season number"
+								},
+								{
+									"key": "episode",
+									"value": "1",
+									"description": "Episode number"
+								}
+							]
+						},
+						"description": "Get stream links for a TV show episode using nested path"
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "App",
+			"item": [
+				{
+					"name": "Health Check",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/",
+							"host": [
+								"{{base_url}}"
+							]
+						},
+						"description": "App health check / Hello World"
+					},
+					"response": []
+				}
+			]
+		}
+	],
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://localhost:3000",
+			"type": "string"
+		}
+	]
+}

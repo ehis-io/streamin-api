@@ -1,0 +1,69 @@
+name: Deploy for Production
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, production]
+
+    steps:
+      - name: 🧭 Checkout latest code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: 🧹 Clean workspace
+        run: |
+          echo "Cleaning workspace..."
+          git clean -fdx
+
+      - name: 🧼 Remove old build artifacts
+        run: |
+          echo "Removing old dist folder..."
+          rm -rf dist
+
+      - name: ⚙️ Cache npm
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            npm-
+
+      - name: 🛠️ Create .env file
+        run: |
+          echo "Creating .env file..."
+          cat <<EOF > .env
+ 
+          PORT=${{ vars.PORT }}
+        
+          DATABASE_URL=${{ secrets.DATABASE_URL }}
+
+         
+          REDIS_HOST=${{ vars.REDIS_HOST }}
+          REDIS_PORT=${{ vars.REDIS_PORT }}
+          TMDB_API_KEY=${{ vars.TMDB_API_KEY }}
+
+          EOF
+
+      - name: 🔍 Check .env file
+        run: cat .env
+
+      - name: 📦 Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm run test
+
+      - name: 🏗️ Build app & Run Migrations
+        run: |
+          npm run build:dev
+          npm run migration:run
+
+      - name: 🚀 Reload PM2
+        run: |
+          pm2 reload ecosystem.config.js --env development
+          pm2 save
