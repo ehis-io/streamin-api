@@ -144,7 +144,6 @@ export class ProvidersService {
         const mapping = await (this.prisma as any).providerMapping.findUnique({
           where: { mappingKey }
         });
-
         if (mapping) {
           this.logger.debug(`Using mapped URL for ${scraper.name}: ${mapping.externalUrl}`);
           searchResults = [{
