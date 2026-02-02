@@ -153,7 +153,6 @@ export class ProvidersService {
           }];
         } else {
           searchResults = await scraper.search(title, tmdbId, imdbId, malId);
-
           // Save the first mapping for future use
           if (searchResults.length > 0) {
             const bestResult = searchResults[0];
