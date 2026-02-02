@@ -34,57 +34,79 @@ export class VidLinkScraper implements Scraper {
   }
 
   async getStreamLinks(url: string, episode?: { season?: number, episode: number, type?: 'sub' | 'dub' }): Promise<StreamLink[]> {
-    this.logger.log(`Generating VidLink stream for: ${url} ${episode ? `(E${episode.episode}${episode.season ? `, S${episode.season}` : ''}, ${episode.type})` : ''}`);
+    this.logger.log(`Attempting HLS extraction for VidLink: ${url}`);
 
+    const puppeteer = require('puppeteer-extra');
+    const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+    puppeteer.use(StealthPlugin());
+
+    let browser;
     try {
-      let finalUrl = url;
+      browser = await puppeteer.launch({
+        headless: true,
+        args: ['--no-sandbox', '--disable-setuid-sandbox']
+      });
 
+      const page = await browser.newPage();
+      await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36');
+
+      let finalUrl = url;
       if (url.includes('/anime/')) {
-        // Format: /anime/{MALid}/{number}/{subOrDub}
         const type = episode?.type || 'sub';
         const epNum = episode?.episode || 1;
         finalUrl = `${url}/${epNum}/${type}`;
-        this.logger.log(`VidLink Anime URL constructed: ${finalUrl} (MAL ID: ${url.split('/anime/')[1]}, Episode: ${epNum}, Type: ${type})`);
       } else if (episode && episode.season) {
         finalUrl = url.replace('/movie/', '/tv/') + `/${episode.season}/${episode.episode}`;
       }
 
-      // Read customization from config or use theme-consistent defaults
-      const primaryColor = this.configService.get<string>('VIDLINK_PRIMARY_COLOR', 'e50914');
-      const secondaryColor = this.configService.get<string>('VIDLINK_SECONDARY_COLOR', '1f1f1f');
-      const iconColor = this.configService.get<string>('VIDLINK_ICON_COLOR', 'ffffff');
-      const icons = this.configService.get<string>('VIDLINK_ICONS', 'vid');
+      this.logger.debug(`Navigating to VidLink URL: ${finalUrl}`);
 
-      const params = new URLSearchParams({
-        primaryColor,
-        secondaryColor,
-        iconColor,
-        icons,
-        player: 'default',
-        autoplay: 'true',
-        title: 'true',
-        poster: 'true',
-        nextbutton: 'true',
-        fallback: 'true'
+      const m3u8Links: StreamLink[] = [];
+
+      await page.setRequestInterception(true);
+      page.on('request', (request) => {
+        const reqUrl = request.url();
+        if (reqUrl.includes('.m3u8')) {
+          this.logger.debug(`Found VidLink M3U8: ${reqUrl}`);
+          m3u8Links.push({
+            url: reqUrl,
+            quality: 'Auto',
+            isM3U8: true,
+            headers: request.headers()
+          });
+        }
+        request.continue();
       });
 
-      finalUrl = `${finalUrl}?${params.toString()}`;
+      await page.goto(finalUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+      await new Promise(resolve => setTimeout(resolve, 3000));
 
-      this.logger.log(`VidLink final URL: ${finalUrl}`);
+      if (m3u8Links.length > 0) {
+        this.logger.log(`Successfully extracted ${m3u8Links.length} M3U8 links for VidLink`);
+        return m3u8Links;
+      }
 
+      this.logger.warn(`No M3U8 links found for VidLink, falling back to custom embed URL`);
+      const primaryColor = this.configService.get<string>('VIDLINK_PRIMARY_COLOR', 'e50914');
+      const params = new URLSearchParams({
+        primaryColor,
+        player: 'default',
+        autoplay: 'true'
+      });
       return [{
-        url: finalUrl,
+        url: `${finalUrl}?${params.toString()}`,
         quality: 'Auto',
         isM3U8: false,
         headers: {
-          'Referer': `${this.baseUrl}/`,
-          'Origin': this.baseUrl
+          'Referer': `${this.baseUrl}/`
         }
       }];
 
     } catch (error) {
-      this.logger.error(`VidLink URL construction failed: ${error.message}`);
+      this.logger.error(`VidLink extraction failed: ${error.message}`);
       return [];
+    } finally {
+      if (browser) await browser.close();
     }
   }
 }

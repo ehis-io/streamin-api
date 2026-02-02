@@ -66,41 +66,86 @@ export class VidSrcScraper implements Scraper {
   }
 
   async getStreamLinks(url: string, episode?: { season?: number, episode: number, type?: 'sub' | 'dub' }): Promise<StreamLink[]> {
-    this.logger.log(`Fetching stream from ${url}`);
+    this.logger.log(`Attempting HLS extraction for VidSrc: ${url}`);
 
+    const puppeteer = require('puppeteer-extra');
+    const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+    puppeteer.use(StealthPlugin());
+
+    let browser;
     try {
-      let embedUrl = url;
-      const urlObj = new URL(url);
-      const domain = `${urlObj.protocol}//${urlObj.hostname}`;
+      browser = await puppeteer.launch({
+        headless: true, // We can run headless for extraction
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-accelerated-2d-canvas',
+          '--no-first-run',
+          '--no-zygote',
+          '--disable-gpu'
+        ]
+      });
 
-      // Handle TV show / Anime episode information
+      const page = await browser.newPage();
+      await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36');
+
+      let embedUrl = url;
       if (episode && (episode.season || episode.episode)) {
-        // If the base URL was /movie, force switch to /tv
         if (embedUrl.includes('/movie?')) {
           embedUrl = embedUrl.replace('/movie?', '/tv?');
         }
-
         const operator = embedUrl.includes('?') ? '&' : '?';
-        // For anime, if season is missing, default to 1.
         const season = episode.season || 1;
         embedUrl = `${embedUrl}${operator}season=${season}&episode=${episode.episode}`;
       }
 
-      this.logger.log(`VidSrc embed URL: ${embedUrl}`);
+      this.logger.debug(`Navigating to embed URL: ${embedUrl}`);
+      
+      const m3u8Links: StreamLink[] = [];
 
+      // Intercept network requests to find the master playlist
+      await page.setRequestInterception(true);
+      page.on('request', (request) => {
+        const reqUrl = request.url();
+        if (reqUrl.includes('.m3u8')) {
+          this.logger.debug(`Found potential M3U8 link: ${reqUrl}`);
+          m3u8Links.push({
+            url: reqUrl,
+            quality: 'Auto',
+            isM3U8: true,
+            headers: request.headers()
+          });
+        }
+        request.continue();
+      });
+
+      // Navigate and wait for some time for streams to load
+      await page.goto(embedUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+      
+      // Sometimes we need a small delay for dynamic injectors
+      await new Promise(resolve => setTimeout(resolve, 5000));
+
+      if (m3u8Links.length > 0) {
+        this.logger.log(`Successfully extracted ${m3u8Links.length} M3U8 links for VidSrc`);
+        return m3u8Links;
+      }
+
+      this.logger.warn(`No M3U8 links found for VidSrc, falling back to embed URL`);
       return [{
         url: embedUrl,
         quality: 'Auto',
         isM3U8: false,
         headers: {
-          'Referer': `${domain}/`,
-          'Origin': domain
+          'Referer': 'https://vicsrc.to/', // Common fallback referer
         }
       }];
 
     } catch (error) {
-      this.logger.error(`VidSrc scraping failed: ${error.message}`);
+      this.logger.error(`VidSrc extraction failed: ${error.message}`);
       return [];
+    } finally {
+      if (browser) await browser.close();
     }
   }
 }
