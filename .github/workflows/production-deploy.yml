@@ -38,7 +38,7 @@ jobs:
           echo "Creating .env file..."
           cat <<EOF > .env
  
-          PORT=${{ vars.PORT }}
+          PORT=${{ secrets.PORT }}
         
           DATABASE_URL=${{ secrets.DATABASE_URL }}
           REDIS_HOST=${{ secrets.REDIS_HOST }}
