@@ -56,10 +56,10 @@ jobs:
       # - name: Run tests
         # run: npm run test
 
-      - name: 🏗️ Build app & Run Migrations
-        run: |
-          npm run build:dev
-          npm run migration:run
+      # - name: 🏗️ Build app & Run Migrations
+      #   run: |
+      #     npm run build:dev
+      #     npm run migration:run
 
       - name: 🚀 Reload PM2
         run: |
