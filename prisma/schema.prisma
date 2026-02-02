@@ -27,3 +27,77 @@ model Provider {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 }
+
+model Anime {
+  id          String          @id @default(auto()) @map("_id") @db.ObjectId
+  malId       Int             @unique
+  title       String
+  providers   AnimeProvider[]
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+}
+
+model AnimeProvider {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  animeId     String   @db.ObjectId
+  anime       Anime    @relation(fields: [animeId], references: [id])
+  name        String
+  embedUrl    String
+  priority    Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+
+model StreamedLink {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  tmdbId      Int?
+  malId       Int?
+  season      Int?
+  episode     Int?
+  url         String
+  quality     String?
+  isM3U8      Boolean  @default(false)
+  provider    String
+  headers     String?  // JSON stringified headers
+  type        String?  // "sub" or "dub"
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([tmdbId, season, episode])
+  @@index([malId, episode])
+}
+
+model ProviderMapping {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  tmdbId      Int?
+  malId       Int?
+  provider    String
+  externalUrl String
+  mappingKey  String   @unique // Format: "tmdb:id:provider" or "mal:id:provider"
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([tmdbId, provider])
+  @@index([malId, provider])
+}
+
+model Playlist {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  name        String
+  description String?
+  items       PlaylistItem[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model PlaylistItem {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  playlistId  String   @db.ObjectId
+  playlist    Playlist @relation(fields: [playlistId], references: [id])
+  tmdbId      Int?
+  malId       Int?
+  type        String   // "movie", "tv", "anime"
+  title       String
+  posterPath  String?
+}

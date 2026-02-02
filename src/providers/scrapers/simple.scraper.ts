@@ -16,7 +16,7 @@ export class SimpleScraper implements Scraper {
     { name: 'AutoEmbed', searchUrl: (q) => `https://autoembed.to/movie/${encodeURIComponent(q)}`, selector: 'a.play-link' }
   ];
 
-  async search(query: string, tmdbId?: number, imdbId?: string): Promise<ScraperSearchResult[]> {
+  async search(query: string, tmdbId?: number, imdbId?: string, malId?: number): Promise<ScraperSearchResult[]> {
     this.logger.log(`Searching for "${query}"`);
     const results: ScraperSearchResult[] = [];
 
@@ -43,7 +43,7 @@ export class SimpleScraper implements Scraper {
     return results;
   }
 
-  async getStreamLinks(url: string, episode?: { season: number, episode: number }): Promise<StreamLink[]> {
+  async getStreamLinks(url: string, episode?: { season?: number, episode: number, type?: 'sub' | 'dub' }): Promise<StreamLink[]> {
     this.logger.log(`SimpleScraper: Skipping puppeteer extraction for ${url}`);
     // SimpleScraper is disabled for now due to puppeteer dependency issues
     // Return empty array to let other scrapers handle it

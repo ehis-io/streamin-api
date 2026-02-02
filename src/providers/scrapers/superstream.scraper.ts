@@ -8,7 +8,7 @@ export class SuperStreamScraper implements Scraper {
   priority = 3; // Lower priority - used as fallback
   private readonly logger = new Logger(SuperStreamScraper.name);
 
-  async search(query: string, tmdbId?: number, imdbId?: string): Promise<ScraperSearchResult[]> {
+  async search(query: string, tmdbId?: number, imdbId?: string, malId?: number): Promise<ScraperSearchResult[]> {
     // Mock search results for SuperStream
     return [
       {
@@ -19,7 +19,7 @@ export class SuperStreamScraper implements Scraper {
     ];
   }
 
-  async getStreamLinks(url: string, episode?: { season: number, episode: number }): Promise<StreamLink[]> {
+  async getStreamLinks(url: string, episode?: { season?: number, episode: number, type?: 'sub' | 'dub' }): Promise<StreamLink[]> {
     this.logger.log(`Starting Puppeteer for ${url}`);
     let browser;
     try {

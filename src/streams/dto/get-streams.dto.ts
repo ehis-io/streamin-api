@@ -17,4 +17,12 @@ export class GetStreamsDto {
   @IsInt()
   @Min(1)
   episode?: number;
+
+  @IsOptional()
+  @IsString()
+  type?: 'sub' | 'dub';
+
+  @IsOptional()
+  @IsString()
+  mediaType?: 'movie' | 'tv' | 'anime';
 }

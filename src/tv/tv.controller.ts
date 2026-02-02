@@ -1,25 +1,21 @@
 import { Controller, Get, Query, Param } from '@nestjs/common';
 import { TvService } from './tv.service';
-import { IsString, IsNotEmpty } from 'class-validator';
-
-class SearchDto {
-  @IsString()
-  @IsNotEmpty()
-  q: string;
-}
+import { SearchDto } from '../common/dto/search.dto';
+import { DiscoverDto } from '../common/dto/discover.dto';
+import { PaginationDto } from '../common/dto/pagination.dto';
 
 @Controller('tv')
 export class TvController {
-  constructor(private readonly tvService: TvService) {}
+  constructor(private readonly tvService: TvService) { }
 
   @Get('trending')
-  getTrending(@Query('page') page: string) {
-    return this.tvService.getTrending(page ? +page : 1);
+  getTrending(@Query() query: PaginationDto) {
+    return this.tvService.getTrending(query.page);
   }
 
   @Get('search')
-  search(@Query() query: SearchDto, @Query('page') page: string) {
-    return this.tvService.search(query.q, page ? +page : 1);
+  search(@Query() query: SearchDto) {
+    return this.tvService.search(query.q, query.page);
   }
 
   @Get('genres')
@@ -28,8 +24,13 @@ export class TvController {
   }
 
   @Get('discover')
-  discover(@Query() query: any) {
+  discover(@Query() query: DiscoverDto) {
     return this.tvService.discover(query);
+  }
+
+  @Get(':id/recommendations')
+  getRecommendations(@Param('id') id: string) {
+    return this.tvService.getRecommendations(+id);
   }
 
   @Get(':id')

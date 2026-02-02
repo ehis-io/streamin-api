@@ -7,7 +7,7 @@ export class MoviesService {
   constructor(
     private tmdbService: TmdbService,
     private prismaService: PrismaService,
-  ) {}
+  ) { }
 
   async getTrending(page: number = 1) {
     return this.tmdbService.getTrending('movie', page);
@@ -36,5 +36,9 @@ export class MoviesService {
 
   async discover(params: any) {
     return this.tmdbService.discover('movie', params);
+  }
+
+  async getRecommendations(id: number) {
+    return this.tmdbService.getRecommendations(id, 'movie');
   }
 }

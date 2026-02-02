@@ -7,7 +7,7 @@ export class TvService {
   constructor(
     private tmdbService: TmdbService,
     private prismaService: PrismaService,
-  ) {}
+  ) { }
 
   async getTrending(page: number = 1) {
     return this.tmdbService.getTrending('tv', page);
@@ -36,5 +36,9 @@ export class TvService {
 
   async discover(params: any) {
     return this.tmdbService.discover('tv', params);
+  }
+
+  async getRecommendations(id: number) {
+    return this.tmdbService.getRecommendations(id, 'tv');
   }
 }
