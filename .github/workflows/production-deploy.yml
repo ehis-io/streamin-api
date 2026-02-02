@@ -7,7 +7,7 @@ on:
 
 jobs:
   deploy:
-    runs-on: [self-hosted, production]
+    runs-on: [self-hosted, streaming]
 
     steps:
       - name: 🧭 Checkout latest code
@@ -41,11 +41,9 @@ jobs:
           PORT=${{ vars.PORT }}
         
           DATABASE_URL=${{ secrets.DATABASE_URL }}
-
-         
-          REDIS_HOST=${{ vars.REDIS_HOST }}
-          REDIS_PORT=${{ vars.REDIS_PORT }}
-          TMDB_API_KEY=${{ vars.TMDB_API_KEY }}
+          REDIS_HOST=${{ secrets.REDIS_HOST }}
+          REDIS_PORT=${{ secrets.REDIS_PORT }}
+          TMDB_API_KEY=${{ secrets.TMDB_API_KEY }}
 
           EOF
 
