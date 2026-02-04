@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Scraper, ScraperSearchResult, StreamLink } from '../scraper.interface';
+import { PuppeteerService } from '../../puppeteer/puppeteer.service';
 
 @Injectable()
 export class VidSrcScraper implements Scraper {
@@ -12,6 +13,8 @@ export class VidSrcScraper implements Scraper {
     'https://vidsrcme.su',
     'https://vsrc.su'
   ];
+
+  constructor(private puppeteerService: PuppeteerService) { }
 
   async search(query: string, tmdbId?: number, imdbId?: string, malId?: number): Promise<ScraperSearchResult[]> {
     // VidSrc-embed.ru works with both TMDB and IMDB IDs
@@ -30,20 +33,7 @@ export class VidSrcScraper implements Scraper {
 
     // Treat 'anime' media type as 'tv' if we have a TMDB ID
     // (Most providers index anime as TV shows via TMDB)
-    const type = 'tv'; // For anime we default to TV if we got here. 
-    // Wait, general search calls this too. 
-    // We need to know if it's movie or tv.
-    // The `getStreamLinks` adjusts, but search returns a URL.
-    // Actually, let's infer: if it's anime (malId present), use 'tv'.
-    // But the search method signature doesn't pass 'type'.
-
-    // Simple heuristic: If malId is present, it's anime => 'tv'.
-    // Otherwise we default to 'movie', but we might need to be smarter.
-    // The `ProvidersService` calls `search` then `getStreamLinks`.
-    // The `search` returns a `url` that `getStreamLinks` parses.
-
-    // Changing default logic:
-    // We will return generic embed URLs.
+    const type = 'tv'; 
 
     const idParam = imdbId ? `imdb=${imdbId}` : `tmdb=${tmdbId}`;
 
@@ -68,26 +58,7 @@ export class VidSrcScraper implements Scraper {
   async getStreamLinks(url: string, episode?: { season?: number, episode: number, type?: 'sub' | 'dub' }): Promise<StreamLink[]> {
     this.logger.log(`Attempting HLS extraction for VidSrc: ${url}`);
 
-    const puppeteer = require('puppeteer-extra');
-    const StealthPlugin = require('puppeteer-extra-plugin-stealth');
-    puppeteer.use(StealthPlugin());
-
-    let browser;
-    try {
-      browser = await puppeteer.launch({
-        headless: true, // We can run headless for extraction
-        args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage',
-          '--disable-accelerated-2d-canvas',
-          '--no-first-run',
-          '--no-zygote',
-          '--disable-gpu'
-        ]
-      });
-
-      const page = await browser.newPage();
+    return this.puppeteerService.withPage(async (page) => {
       await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36');
 
       let embedUrl = url;
@@ -121,10 +92,13 @@ export class VidSrcScraper implements Scraper {
       });
 
       // Navigate and wait for some time for streams to load
-      await page.goto(embedUrl, { waitUntil: 'networkidle2', timeout: 30000 });
-      
-      // Sometimes we need a small delay for dynamic injectors
-      await new Promise(resolve => setTimeout(resolve, 5000));
+      try {
+        await page.goto(embedUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+        // Sometimes we need a small delay for dynamic injectors
+        await new Promise(resolve => setTimeout(resolve, 5000));
+      } catch (e) {
+        this.logger.warn(`Navigation to ${embedUrl} failed or timed out: ${e.message}`);
+      }
 
       if (m3u8Links.length > 0) {
         this.logger.log(`Successfully extracted ${m3u8Links.length} M3U8 links for VidSrc`);
@@ -140,12 +114,9 @@ export class VidSrcScraper implements Scraper {
           'Referer': 'https://vicsrc.to/', // Common fallback referer
         }
       }];
-
-    } catch (error) {
+    }).catch(error => {
       this.logger.error(`VidSrc extraction failed: ${error.message}`);
       return [];
-    } finally {
-      if (browser) await browser.close();
-    }
+    });
   }
 }

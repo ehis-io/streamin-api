@@ -18,7 +18,7 @@ export class TmdbService {
   }
 
   private async getCachedRequest(key: string, url: string, params: any, ttl: number = 604800000) {
-    const cached = await this.cacheManager.get(key);
+    const cached = await this.cacheManager.get(key.replace(/[:\s?&]/g, '_'));
     if (cached) {
       return cached;
     }
@@ -31,7 +31,7 @@ export class TmdbService {
 
     try {
       const response = await axios.get(url, { params: { ...params, api_key: this.apiKey } });
-      await this.cacheManager.set(key, response.data, ttl);
+      await this.cacheManager.set(key.replace(/[:\s?&]/g, '_'), response.data, ttl);
       return response.data;
     } catch (e) {
       this.logger.error(`TMDB request failed: ${e.message}`);
@@ -78,5 +78,9 @@ export class TmdbService {
 
   async getRecommendations(id: number, type: 'movie' | 'tv' = 'movie', page: number = 1) {
     return this.getCachedRequest(`recommendations:${type}:${id}:page:${page}`, `${this.baseUrl}/${type}/${id}/recommendations`, { page });
+  }
+
+  async getSeasonDetails(id: number, season: number) {
+    return this.getCachedRequest(`tv:${id}:season:${season}`, `${this.baseUrl}/tv/${id}/season/${season}`, {});
   }
 }

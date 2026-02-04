@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Scraper, ScraperSearchResult, StreamLink } from '../scraper.interface';
-import * as puppeteer from 'puppeteer';
+import { PuppeteerService } from '../../puppeteer/puppeteer.service';
 
 @Injectable()
 export class AnimePaheScraper implements Scraper {
@@ -9,14 +9,10 @@ export class AnimePaheScraper implements Scraper {
     private readonly logger = new Logger(AnimePaheScraper.name);
     private readonly baseUrl = 'https://animepahe.si';
 
+    constructor(private puppeteerService: PuppeteerService) { }
+
     async search(query: string, tmdbId?: number, imdbId?: string, malId?: number): Promise<ScraperSearchResult[]> {
-        let browser;
-        try {
-            browser = await puppeteer.launch({
-                headless: false,
-                args: ['--no-sandbox', '--disable-setuid-sandbox']
-            });
-            const page = await browser.newPage();
+        return this.puppeteerService.withPage(async (page) => {
             // Set User-Agent to look like a real browser
             await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
@@ -56,27 +52,19 @@ export class AnimePaheScraper implements Scraper {
             }, this.baseUrl);
 
             return results as ScraperSearchResult[];
-        } catch (e) {
+        }).catch(e => {
             this.logger.error(`AnimePahe Puppeteer search failed: ${e.message}`);
             return [];
-        } finally {
-            if (browser) await browser.close();
-        }
+        });
     }
 
     async getStreamLinks(url: string, episode?: { season?: number, episode: number, type?: 'sub' | 'dub' }): Promise<StreamLink[]> {
         if (!episode || !episode.episode) return [];
 
-        let browser;
-        try {
+        return this.puppeteerService.withPage(async (page) => {
             const session = url.split('/').pop();
             if (!session) return [];
 
-            browser = await puppeteer.launch({
-                headless: true,
-                args: ['--no-sandbox', '--disable-setuid-sandbox']
-            });
-            const page = await browser.newPage();
             await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
             // 1. Get Episode Session
@@ -95,7 +83,7 @@ export class AnimePaheScraper implements Scraper {
                 try {
                     epData = JSON.parse(content);
                 } catch {
-                    const pre = await page.evaluate(() => document.querySelector('pre')?.innerText);
+                    const pre = await page.evaluate(() => (document.querySelector('pre') as any)?.innerText);
                     if (pre) epData = JSON.parse(pre);
                 }
 
@@ -147,12 +135,9 @@ export class AnimePaheScraper implements Scraper {
                     'Origin': 'https://kwik.cx'
                 }
             }));
-
-        } catch (e) {
+        }).catch(e => {
             this.logger.error(`AnimePahe Puppeteer scraping failed: ${e.message}`);
             return [];
-        } finally {
-            if (browser) await browser.close();
-        }
+        });
     }
 }

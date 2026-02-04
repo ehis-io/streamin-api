@@ -10,11 +10,13 @@ export class TvController {
 
   @Get('trending')
   getTrending(@Query() query: PaginationDto) {
+    console.log('[TV] Trending request:', query);
     return this.tvService.getTrending(query.page);
   }
 
   @Get('search')
   search(@Query() query: SearchDto) {
+    console.log('[TV] Search request:', query);
     return this.tvService.search(query.q, query.page);
   }
 
@@ -36,5 +38,10 @@ export class TvController {
   @Get(':id')
   getDetails(@Param('id') id: string) {
     return this.tvService.getDetails(+id);
+  }
+
+  @Get(':id/season/:season')
+  getSeasonDetails(@Param('id') id: string, @Param('season') season: string) {
+    return this.tvService.getSeasonDetails(+id, +season);
   }
 }

@@ -13,6 +13,7 @@ import { MALModule } from './mal/mal.module';
 import { AnimesModule } from './animes/animes.module';
 import { AiModule } from './ai/ai.module';
 import { PlaylistsModule } from './playlists/playlists.module';
+import { PuppeteerModule } from './puppeteer/puppeteer.module';
 
 @Module({
   imports: [
@@ -28,6 +29,7 @@ import { PlaylistsModule } from './playlists/playlists.module';
     AnimesModule,
     AiModule,
     PlaylistsModule,
+    PuppeteerModule,
   ],
   controllers: [AppController],
   providers: [AppService],

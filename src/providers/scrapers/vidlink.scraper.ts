@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Scraper, ScraperSearchResult, StreamLink } from '../scraper.interface';
+import { PuppeteerService } from '../../puppeteer/puppeteer.service';
 
 @Injectable()
 export class VidLinkScraper implements Scraper {
@@ -10,7 +11,10 @@ export class VidLinkScraper implements Scraper {
   private readonly logger = new Logger(VidLinkScraper.name);
   private readonly baseUrl = 'https://vidlink.pro';
 
-  constructor(private configService: ConfigService) { }
+  constructor(
+    private configService: ConfigService,
+    private puppeteerService: PuppeteerService
+  ) { }
 
   async search(query: string, tmdbId?: number, imdbId?: string, malId?: number): Promise<ScraperSearchResult[]> {
     if (malId) {
@@ -36,18 +40,7 @@ export class VidLinkScraper implements Scraper {
   async getStreamLinks(url: string, episode?: { season?: number, episode: number, type?: 'sub' | 'dub' }): Promise<StreamLink[]> {
     this.logger.log(`Attempting HLS extraction for VidLink: ${url}`);
 
-    const puppeteer = require('puppeteer-extra');
-    const StealthPlugin = require('puppeteer-extra-plugin-stealth');
-    puppeteer.use(StealthPlugin());
-
-    let browser;
-    try {
-      browser = await puppeteer.launch({
-        headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox']
-      });
-
-      const page = await browser.newPage();
+    return this.puppeteerService.withPage(async (page) => {
       await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36');
 
       let finalUrl = url;
@@ -78,8 +71,12 @@ export class VidLinkScraper implements Scraper {
         request.continue();
       });
 
-      await page.goto(finalUrl, { waitUntil: 'networkidle2', timeout: 30000 });
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      try {
+        await page.goto(finalUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+        await new Promise(resolve => setTimeout(resolve, 3000));
+      } catch (e) {
+        this.logger.warn(`Navigation to ${finalUrl} failed or timed out: ${e.message}`);
+      }
 
       if (m3u8Links.length > 0) {
         this.logger.log(`Successfully extracted ${m3u8Links.length} M3U8 links for VidLink`);
@@ -101,12 +98,9 @@ export class VidLinkScraper implements Scraper {
           'Referer': `${this.baseUrl}/`
         }
       }];
-
-    } catch (error) {
+    }).catch(error => {
       this.logger.error(`VidLink extraction failed: ${error.message}`);
       return [];
-    } finally {
-      if (browser) await browser.close();
-    }
+    });
   }
 }

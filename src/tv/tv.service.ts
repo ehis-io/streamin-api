@@ -41,4 +41,8 @@ export class TvService {
   async getRecommendations(id: number) {
     return this.tmdbService.getRecommendations(id, 'tv');
   }
+
+  async getSeasonDetails(id: number, season: number) {
+    return this.tmdbService.getSeasonDetails(id, season);
+  }
 }
