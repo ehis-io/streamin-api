@@ -131,7 +131,9 @@ export class ProvidersService {
       !s.supportedTypes || s.supportedTypes.includes(activeMediaType!)
     );
 
-    const scraperResults = await Promise.all(activeScrapers.map(async (scraper) => {
+    // Process scrapers sequentially (they are already sorted by priority)
+    // This allows early exit when good links are found, saving resources.
+    for (const scraper of activeScrapers) {
       try {
         let searchResults: ScraperSearchResult[] = [];
 
@@ -144,6 +146,7 @@ export class ProvidersService {
         const mapping = await (this.prisma as any).providerMapping.findUnique({
           where: { mappingKey }
         });
+
         if (mapping) {
           this.logger.debug(`Using mapped URL for ${scraper.name}: ${mapping.externalUrl}`);
           searchResults = [{
@@ -156,7 +159,6 @@ export class ProvidersService {
           if (searchResults.length > 0) {
             const bestResult = searchResults[0];
             try {
-              // Manual upsert-like logic with mappingKey
               await (this.prisma as any).providerMapping.upsert({
                 where: { mappingKey },
                 update: {
@@ -198,31 +200,30 @@ export class ProvidersService {
         const nestedResults = await Promise.all(scraperLinksPromises);
         const flatLinks = nestedResults.flat();
 
-        // Validate streams (check for "Not Found" or specific error text)
-        // This is important for providers that return 200 OK even for error pages
-        // Validate streams in parallel (respecting per-domain limits inside validateStream)
+        // Validate streams
         const validationResults = await Promise.all(
           flatLinks.map(async (link) => {
-            // Respecting per-domain limits inside validateStream
             const isValid = await this.validateStream(link.url);
             if (isValid) {
-              if (onLinkFound) (onLinkFound as any)(link); // REPORT REAL-TIME
+              if (onLinkFound) onLinkFound(link);
               return link;
             }
             return null;
           })
         );
 
-        return validationResults.filter((l): l is (typeof flatLinks)[0] => l !== null);
+        const validLinks = validationResults.filter((l): l is StreamLink & { provider: string } => l !== null);
+        allLinks.push(...validLinks);
+
+        // EARLY EXIT: If we found high-quality links from a high-priority provider, stop here.
+        if (allLinks.length >= 2) {
+          this.logger.log(`Found ${allLinks.length} valid links for ${title}, finishing early.`);
+          break;
+        }
       } catch (e) {
         this.logger.warn(`${scraper.name} failed: ${e.message}`);
-        return [];
       }
-    }));
-
-    scraperResults.forEach(res => {
-      if (res) allLinks.push(...res);
-    });
+    }
 
     if (allLinks.length > 0) {
       await this.cacheManager.set(cacheKey, allLinks, 86400000); // 24 hours

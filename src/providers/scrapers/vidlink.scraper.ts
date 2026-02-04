@@ -53,51 +53,66 @@ export class VidLinkScraper implements Scraper {
       }
 
       this.logger.debug(`Navigating to VidLink URL: ${finalUrl}`);
+      
+      return new Promise<StreamLink[]>(async (resolve) => {
+        const m3u8Links: StreamLink[] = [];
+        let isResolved = false;
 
-      const m3u8Links: StreamLink[] = [];
+        const cleanup = () => {
+          page.removeAllListeners('request');
+        };
 
-      await page.setRequestInterception(true);
-      page.on('request', (request) => {
-        const reqUrl = request.url();
-        if (reqUrl.includes('.m3u8')) {
-          this.logger.debug(`Found VidLink M3U8: ${reqUrl}`);
-          m3u8Links.push({
-            url: reqUrl,
+        const resolveLinks = (links: StreamLink[]) => {
+          if (isResolved) return;
+          isResolved = true;
+          cleanup();
+          resolve(links);
+        };
+
+        page.on('request', (request) => {
+          const reqUrl = request.url();
+          if (reqUrl.includes('.m3u8')) {
+            this.logger.debug(`Found VidLink M3U8 early: ${reqUrl}`);
+            m3u8Links.push({
+              url: reqUrl,
+              quality: 'Auto',
+              isM3U8: true,
+              headers: request.headers()
+            });
+
+            // Resolve early for master playlist
+            if (reqUrl.includes('master') || reqUrl.includes('index.m3u8')) {
+              resolveLinks(m3u8Links);
+            }
+          }
+        });
+
+        try {
+          // VidLink usually loads M3U8s very early after DOM content
+          await page.goto(finalUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+          
+          // Wait a max of 3s for slow injectors
+          if (m3u8Links.length === 0) {
+            await new Promise(r => setTimeout(r, 3000));
+          }
+        } catch (e) {
+          this.logger.warn(`VidLink navigation timed out, checking extracted links...`);
+        }
+
+        if (m3u8Links.length > 0) {
+          resolveLinks(m3u8Links);
+        } else {
+          // Fallback to custom embed URL
+          this.logger.warn(`No M3U8 links for VidLink, falling back`);
+          const primaryColor = this.configService.get<string>('VIDLINK_PRIMARY_COLOR', 'e50914');
+          resolveLinks([{
+            url: `${finalUrl}?primaryColor=${primaryColor}&player=default&autoplay=true`,
             quality: 'Auto',
-            isM3U8: true,
-            headers: request.headers()
-          });
+            isM3U8: false,
+            headers: { 'Referer': `${this.baseUrl}/` }
+          }]);
         }
-        request.continue();
       });
-
-      try {
-        await page.goto(finalUrl, { waitUntil: 'networkidle2', timeout: 30000 });
-        await new Promise(resolve => setTimeout(resolve, 3000));
-      } catch (e) {
-        this.logger.warn(`Navigation to ${finalUrl} failed or timed out: ${e.message}`);
-      }
-
-      if (m3u8Links.length > 0) {
-        this.logger.log(`Successfully extracted ${m3u8Links.length} M3U8 links for VidLink`);
-        return m3u8Links;
-      }
-
-      this.logger.warn(`No M3U8 links found for VidLink, falling back to custom embed URL`);
-      const primaryColor = this.configService.get<string>('VIDLINK_PRIMARY_COLOR', 'e50914');
-      const params = new URLSearchParams({
-        primaryColor,
-        player: 'default',
-        autoplay: 'true'
-      });
-      return [{
-        url: `${finalUrl}?${params.toString()}`,
-        quality: 'Auto',
-        isM3U8: false,
-        headers: {
-          'Referer': `${this.baseUrl}/`
-        }
-      }];
     }).catch(error => {
       this.logger.error(`VidLink extraction failed: ${error.message}`);
       return [];

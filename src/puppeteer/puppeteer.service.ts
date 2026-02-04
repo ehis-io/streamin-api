@@ -72,6 +72,35 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
     let page: Page | null = null;
     try {
       page = await this.browser!.newPage();
+      
+      // Speed Optimization: Block unnecessary resources and ads/tracking
+      await page.setRequestInterception(true);
+      
+      const blockedResources = ['image', 'stylesheet', 'font', 'media'];
+      const blockedDomains = [
+        'google-analytics.com',
+        'googletagmanager.com',
+        'doubleclick.net',
+        'onesignal.com',
+        'adsbygoogle',
+        'crashlytics.com',
+        'facebook.net'
+      ];
+
+      page.on('request', (request) => {
+        const url = request.url().toLowerCase();
+        const resourceType = request.resourceType();
+
+        if (
+          blockedResources.includes(resourceType) ||
+          blockedDomains.some(domain => url.includes(domain))
+        ) {
+          request.abort();
+        } else {
+          request.continue();
+        }
+      });
+
       // Set reasonable default timeouts
       page.setDefaultNavigationTimeout(30000);
       page.setDefaultTimeout(30000);
