@@ -13,7 +13,8 @@ import { Logger } from '@nestjs/common';
 
 @WebSocketGateway({
     cors: {
-        origin: '*',
+        origin: ['https://filmstreamer.org', 'http://localhost:3000'],
+        credentials: true,
     },
 })
 export class StreamsGateway implements OnGatewayConnection, OnGatewayDisconnect {
