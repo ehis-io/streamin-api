@@ -19,7 +19,6 @@ export class VidSrcScraper implements Scraper {
   async search(query: string, tmdbId?: number, imdbId?: string, malId?: number): Promise<ScraperSearchResult[]> {
     // VidSrc-embed.ru works with both TMDB and IMDB IDs
     // Example: https://vidsrc-embed.ru/embed/movie?imdb=tt36741457
-
     // TEMP: Skip VidSrc if TMDB ID is not present
     if (!tmdbId) {
       this.logger.debug('VidSrc requires TMDB ID, skipping');
