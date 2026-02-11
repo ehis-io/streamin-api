@@ -44,7 +44,7 @@ export class ProvidersService {
     mediaType?: string,
     onLinkFound?: (link: StreamLink) => void
   ): Promise<StreamLink[]> {
-    const cacheKey = `streams:${id}:${season || ''}:${episode || ''}:${mediaType || ''}`;
+    const cacheKey = `streams:${id}:${season || ''}:${episode || ''}:${type}:${mediaType || ''}`;
     const cached = await this.cacheManager.get<StreamLink[]>(cacheKey);
     if (cached) {
       this.logger.log(`Returned cached streams for ${cacheKey}`);
@@ -361,7 +361,7 @@ export class ProvidersService {
           buffer += chunk.toString('utf8');
           const lowerData = buffer.toLowerCase();
 
-          if (lowerData.includes("we coudn't find this episode") ||
+          if (lowerData.includes("we couldn't find this episode") ||
             lowerData.includes("please check back another time") ||
             lowerData.includes("404 not found") ||
             lowerData.includes("video not found") ||

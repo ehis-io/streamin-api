@@ -48,8 +48,21 @@ export class VidLinkScraper implements Scraper {
         const type = episode?.type || 'sub';
         const epNum = episode?.episode || 1;
         finalUrl = `${url}/${epNum}/${type}`;
-      } else if (episode && episode.season) {
-        finalUrl = url.replace('/movie/', '/tv/') + `/${episode.season}/${episode.episode}`;
+      } else if (episode && (episode.season || episode.episode)) {
+        const s = episode.season || 1;
+        const e = episode.episode || 1;
+        if (finalUrl.includes('/movie/')) {
+          finalUrl = finalUrl.replace('/movie/', '/tv/') + `/${s}/${e}`;
+        } else if (!finalUrl.includes('/tv/')) {
+          // If neither, append /tv/s/e (fallback)
+          finalUrl = `${finalUrl.replace(/\/$/, '')}/tv/${s}/${e}`;
+        } else {
+          // Already has /tv/, just append s/e if not present
+          const trailing = `/${s}/${e}`;
+          if (!finalUrl.endsWith(trailing)) {
+            finalUrl = `${finalUrl.replace(/\/$/, '')}${trailing}`;
+          }
+        }
       }
 
       this.logger.debug(`Navigating to VidLink URL: ${finalUrl}`);
