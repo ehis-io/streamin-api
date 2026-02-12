@@ -180,7 +180,8 @@ export class ProvidersService {
           }
         }
 
-        const adjustedEpisode = (tmdbId === 103540 && season === 1) ? (episode || 1) + 1 : (episode || 1);
+        const episodeOffset = mapping?.episodeOffset || 0;
+        const adjustedEpisode = (episode || 1) + episodeOffset;
         
         const scraperLinksPromises = searchResults.map(async (result) => {
           try {

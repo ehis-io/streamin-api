@@ -74,9 +74,9 @@ model ProviderMapping {
   malId       Int?
   provider    String
   externalUrl String
-  mappingKey  String   @unique // Format: "tmdb:id:provider" or "mal:id:provider"
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  episodeOffset Int    @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   @@index([tmdbId, provider])
   @@index([malId, provider])
