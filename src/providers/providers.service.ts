@@ -180,10 +180,12 @@ export class ProvidersService {
           }
         }
 
+        const adjustedEpisode = (tmdbId === 103540 && season === 1) ? (episode || 1) + 1 : (episode || 1);
+        
         const scraperLinksPromises = searchResults.map(async (result) => {
           try {
             const streamParams = (activeMediaType === 'anime' || (season && episode))
-              ? { season, episode: episode || 1, type }
+              ? { season, episode: adjustedEpisode, type }
               : undefined;
 
             const links = await scraper.getStreamLinks(result.url, streamParams);
