@@ -53,10 +53,10 @@ export class StreamsGateway implements OnGatewayConnection, OnGatewayDisconnect 
 
     @SubscribeMessage('find-streams')
     async handleFindStreams(
-        @MessageBody() data: { id: string, season?: number, episode?: number, type: 'sub' | 'dub', mediaType: string },
+        @MessageBody() data: { id: string, season?: number, episode?: number, type: 'sub' | 'dub', mediaType: string, requestId: string },
         @ConnectedSocket() client: Socket,
     ) {
-        this.logger.log(`Find streams started via WS for ${data.id}`);
+        this.logger.log(`Find streams started via WS for ${data.id} (Request ID: ${data.requestId})`);
 
         try {
             const links = await this.providersService.findStreamLinks(
@@ -66,14 +66,14 @@ export class StreamsGateway implements OnGatewayConnection, OnGatewayDisconnect 
                 data.type,
                 data.mediaType,
                 (link) => {
-                    client.emit('stream-link', link);
+                    client.emit('stream-link', { link, requestId: data.requestId });
                 },
             );
 
-            client.emit('streams-complete', links);
+            client.emit('streams-complete', { links, requestId: data.requestId });
         } catch (err) {
             this.logger.error(`WS find-streams failed: ${err.message}`);
-            client.emit('streams-complete', []);
+            client.emit('streams-complete', { links: [], requestId: data.requestId });
         }
     }
 }

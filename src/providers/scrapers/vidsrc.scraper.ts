@@ -65,9 +65,19 @@ export class VidSrcScraper implements Scraper {
         if (embedUrl.includes('/movie?')) {
           embedUrl = embedUrl.replace('/movie?', '/tv?');
         }
-        const operator = embedUrl.includes('?') ? '&' : '?';
-        const season = episode.season || 1;
-        embedUrl = `${embedUrl}${operator}season=${season}&episode=${episode.episode}`;
+        
+        try {
+          const urlObj = new URL(embedUrl);
+          const season = episode.season || 1;
+          urlObj.searchParams.set('season', season.toString());
+          urlObj.searchParams.set('episode', episode.episode.toString());
+          embedUrl = urlObj.toString();
+        } catch (urlError) {
+          // Fallback if URL is weird
+          const operator = embedUrl.includes('?') ? '&' : '?';
+          const season = episode.season || 1;
+          embedUrl = `${embedUrl}${operator}season=${season}&episode=${episode.episode}`;
+        }
       }
 
       this.logger.debug(`Navigating to embed URL: ${embedUrl}`);

@@ -44,10 +44,20 @@ export class HnEmbedScraper implements Scraper {
 
       let embedUrl = url;
       if (episode && (episode.season || episode.episode)) {
-        // Change /movie/ to /tv/ for episodes
-        embedUrl = embedUrl.replace('/movie/', '/tv/');
         const season = episode.season || 1;
-        embedUrl = `${embedUrl}/${season}/${episode.episode}`;
+        const ep = episode.episode || 1;
+        
+        if (embedUrl.includes('/movie/')) {
+          embedUrl = embedUrl.replace('/movie/', '/tv/') + `/${season}/${ep}`;
+        } else if (embedUrl.includes('/tv/')) {
+           const parts = embedUrl.split('/');
+           const tvIndex = parts.indexOf('tv');
+           if (tvIndex !== -1 && parts.length > tvIndex + 1) {
+             embedUrl = parts.slice(0, tvIndex + 2).join('/') + `/${season}/${ep}`;
+           }
+        } else {
+          embedUrl = `${embedUrl.replace(/\/$/, '')}/tv/${season}/${ep}`;
+        }
       }
 
       this.logger.debug(`Navigating to HnEmbed URL: ${embedUrl}`);

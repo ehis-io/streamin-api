@@ -74,6 +74,7 @@ model ProviderMapping {
   malId       Int?
   provider    String
   externalUrl String
+  mappingKey  String   @unique // Format: "tmdb:id:provider" or "mal:id:provider"
   episodeOffset Int    @default(0)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt

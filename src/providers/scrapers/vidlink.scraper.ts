@@ -51,17 +51,22 @@ export class VidLinkScraper implements Scraper {
       } else if (episode && (episode.season || episode.episode)) {
         const s = episode.season || 1;
         const e = episode.episode || 1;
+        
+        // Robust URL building: always start from a base media URL if possible, 
+        // or replace existing /tv/s/e pattern.
         if (finalUrl.includes('/movie/')) {
           finalUrl = finalUrl.replace('/movie/', '/tv/') + `/${s}/${e}`;
-        } else if (!finalUrl.includes('/tv/')) {
-          // If neither, append /tv/s/e (fallback)
-          finalUrl = `${finalUrl.replace(/\/$/, '')}/tv/${s}/${e}`;
-        } else {
-          // Already has /tv/, just append s/e if not present
-          const trailing = `/${s}/${e}`;
-          if (!finalUrl.endsWith(trailing)) {
-            finalUrl = `${finalUrl.replace(/\/$/, '')}${trailing}`;
+        } else if (finalUrl.includes('/tv/')) {
+          // Replace anything after /tv/{id} with /{s}/{e}
+          // URL format: https://vidlink.pro/tv/{id}/{s}/{e}
+          const parts = finalUrl.split('/');
+          const tvIndex = parts.indexOf('tv');
+          if (tvIndex !== -1 && parts.length > tvIndex + 1) {
+            // Keep up to ID, then add s/e
+            finalUrl = parts.slice(0, tvIndex + 2).join('/') + `/${s}/${e}`;
           }
+        } else {
+          finalUrl = `${finalUrl.replace(/\/$/, '')}/tv/${s}/${e}`;
         }
       }
 

@@ -12,8 +12,9 @@ async function bootstrap() {
     origin: [
       'https://filmstreamer.org',
       'https://www.filmstreamer.org',
-      'http://localhost:3001',
+      'http://localhost:3000',
       'http://127.0.0.1:3000',
+      'http://10.251.187.114:3000'
     ],
     credentials: true,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',

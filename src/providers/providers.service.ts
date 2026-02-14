@@ -66,7 +66,7 @@ export class ProvidersService {
 
     const dbLinks = await (this.prisma as any).streamedLink.findMany({
       where: activeMediaType === 'anime'
-        ? { malId: numericId, episode: episode || 1 }
+        ? { malId: numericId, season: season || 1, episode: episode || 1 }
         : { tmdbId: numericId, season: season || null, episode: episode || null }
     });
 
@@ -180,13 +180,10 @@ export class ProvidersService {
           }
         }
 
-        const episodeOffset = mapping?.episodeOffset || 0;
-        const adjustedEpisode = (episode || 1) + episodeOffset;
-        
         const scraperLinksPromises = searchResults.map(async (result) => {
           try {
             const streamParams = (activeMediaType === 'anime' || (season && episode))
-              ? { season, episode: adjustedEpisode, type }
+              ? { season: season || 1, episode: episode || 1, type }
               : undefined;
 
             const links = await scraper.getStreamLinks(result.url, streamParams);
@@ -236,7 +233,7 @@ export class ProvidersService {
         const createManyParams = allLinks.map(link => ({
           tmdbId: activeMediaType !== 'anime' ? tmdbId : null,
           malId: activeMediaType === 'anime' ? malId : null,
-          season: season || null,
+          season: season || (activeMediaType === 'anime' ? 1 : null),
           episode: episode || null,
           url: link.url,
           quality: link.quality,
