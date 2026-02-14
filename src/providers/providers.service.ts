@@ -71,7 +71,6 @@ export class ProvidersService {
     });
 
     if (dbLinks.length > 0) {
-      this.logger.log(`Found ${dbLinks.length} streams in DB for ${id}`);
       const links = dbLinks.map(dbLink => ({
         url: dbLink.url,
         quality: dbLink.quality || 'Auto',
@@ -80,9 +79,19 @@ export class ProvidersService {
         type: dbLink.type as 'sub' | 'dub',
         headers: dbLink.headers ? JSON.parse(dbLink.headers) : undefined
       }));
-      // Also cache in Redis for faster access
-      await this.cacheManager.set(cacheKey, links, 86400000);
-      return links;
+
+      // Check if we need to re-scrape
+      const hasFewLinks = dbLinks.length < 2;
+      const isStale = dbLinks.some(link => Date.now() - new Date(link.updatedAt).getTime() > 24 * 60 * 60 * 1000); // 24 hours
+
+      if (!hasFewLinks && !isStale) {
+        this.logger.log(`Found ${dbLinks.length} streams in DB for ${id}`);
+        // Also cache in Redis for faster access
+        await this.cacheManager.set(cacheKey, links, 86400000);
+        return links;
+      }
+      
+      this.logger.log(`Found ${dbLinks.length} streams in DB, but re-scraping (few links or stale).`);
     }
 
     let title = '';
