@@ -131,99 +131,97 @@ export class ProvidersService {
       !s.supportedTypes || s.supportedTypes.includes(activeMediaType!)
     );
 
-    // Process scrapers sequentially (they are already sorted by priority)
-    // This allows early exit when good links are found, saving resources.
-    for (const scraper of activeScrapers) {
-      try {
-        let searchResults: ScraperSearchResult[] = [];
-
-        // Unique key for individual provider mappings
-        const mappingKey = activeMediaType === 'anime'
-          ? `mal:${malId}:${scraper.name}`
-          : `tmdb:${tmdbId}:${scraper.name}`;
-
-        // Check for existing mapping to skip search
-        const mapping = await (this.prisma as any).providerMapping.findUnique({
-          where: { mappingKey }
-        });
-
-        if (mapping) {
-          this.logger.debug(`Using mapped URL for ${scraper.name}: ${mapping.externalUrl}`);
-          searchResults = [{
-            title: title || 'Media',
-            url: mapping.externalUrl
-          }];
-        } else {
-          searchResults = await scraper.search(title, tmdbId, imdbId, malId);
-          // Save the first mapping for future use
-          if (searchResults.length > 0) {
-            const bestResult = searchResults[0];
+        // Create a promise for each scraper execution
+        const scraperPromises = activeScrapers.map(async (scraper) => {
             try {
-              await (this.prisma as any).providerMapping.upsert({
-                where: { mappingKey },
-                update: {
-                  externalUrl: bestResult.url,
-                  tmdbId: tmdbId || null,
-                  malId: malId || null
-                },
-                create: {
-                  mappingKey,
-                  tmdbId: tmdbId || null,
-                  malId: malId || null,
-                  provider: scraper.name,
-                  externalUrl: bestResult.url
+                let searchResults: ScraperSearchResult[] = [];
+
+                // Unique key for individual provider mappings
+                const mappingKey = activeMediaType === 'anime'
+                    ? `mal:${malId}:${scraper.name}`
+                    : `tmdb:${tmdbId}:${scraper.name}`;
+
+                // Check for existing mapping to skip search
+                const mapping = await (this.prisma as any).providerMapping.findUnique({
+                    where: { mappingKey }
+                });
+
+                if (mapping) {
+                    this.logger.debug(`Using mapped URL for ${scraper.name}: ${mapping.externalUrl}`);
+                    searchResults = [{
+                        title: title || 'Media',
+                        url: mapping.externalUrl
+                    }];
+                } else {
+                    searchResults = await scraper.search(title, tmdbId, imdbId, malId);
+                    // Save the first mapping for future use
+                    if (searchResults.length > 0) {
+                        const bestResult = searchResults[0];
+                        try {
+                            await (this.prisma as any).providerMapping.upsert({
+                                where: { mappingKey },
+                                update: {
+                                    externalUrl: bestResult.url,
+                                    tmdbId: tmdbId || null,
+                                    malId: malId || null
+                                },
+                                create: {
+                                    mappingKey,
+                                    tmdbId: tmdbId || null,
+                                    malId: malId || null,
+                                    provider: scraper.name,
+                                    externalUrl: bestResult.url
+                                }
+                            });
+                        } catch (mapError) {
+                            this.logger.warn(`Could not save provider mapping for ${mappingKey}: ${mapError.message}`);
+                        }
+                    }
                 }
-              });
-            } catch (mapError) {
-              this.logger.warn(`Could not save provider mapping for ${mappingKey}: ${mapError.message}`);
+
+                const scraperLinksPromises = searchResults.map(async (result) => {
+                    try {
+                        const streamParams = (activeMediaType === 'anime' || (season && episode))
+                            ? { season: season || 1, episode: episode || 1, type }
+                            : undefined;
+
+                        const links = await scraper.getStreamLinks(result.url, streamParams);
+                        return links.map(l => ({
+                            ...l,
+                            provider: result.title.includes('(') ? result.title : `${scraper.name} (${new URL(result.url).hostname})`
+                        }) as (StreamLink & { provider: string }));
+                    } catch (e) {
+                        this.logger.warn(`${scraper.name} mirror ${result.url} failed: ${e.message}`);
+                        return [];
+                    }
+                });
+
+                const nestedResults = await Promise.all(scraperLinksPromises);
+                const flatLinks = nestedResults.flat();
+
+                // Validate streams
+                const validationResults = await Promise.all(
+                    flatLinks.map(async (link) => {
+                        const isValid = await this.validateStream(link.url);
+                        if (isValid) {
+                            if (onLinkFound) onLinkFound(link);
+                            return link;
+                        }
+                        return null;
+                    })
+                );
+
+                return validationResults.filter((l): l is StreamLink & { provider: string } => l !== null);
+            } catch (e) {
+                this.logger.warn(`${scraper.name} failed: ${e.message}`);
+                return [];
             }
-          }
-        }
-
-        const scraperLinksPromises = searchResults.map(async (result) => {
-          try {
-            const streamParams = (activeMediaType === 'anime' || (season && episode))
-              ? { season: season || 1, episode: episode || 1, type }
-              : undefined;
-
-            const links = await scraper.getStreamLinks(result.url, streamParams);
-            return links.map(l => ({
-              ...l,
-              provider: result.title.includes('(') ? result.title : `${scraper.name} (${new URL(result.url).hostname})`
-            }) as (StreamLink & { provider: string }));
-          } catch (e) {
-            this.logger.warn(`${scraper.name} mirror ${result.url} failed: ${e.message}`);
-            return [];
-          }
         });
 
-        const nestedResults = await Promise.all(scraperLinksPromises);
-        const flatLinks = nestedResults.flat();
-
-        // Validate streams
-        const validationResults = await Promise.all(
-          flatLinks.map(async (link) => {
-            const isValid = await this.validateStream(link.url);
-            if (isValid) {
-              if (onLinkFound) onLinkFound(link);
-              return link;
-            }
-            return null;
-          })
-        );
-
-        const validLinks = validationResults.filter((l): l is StreamLink & { provider: string } => l !== null);
+        // Execute all scrapers in parallel
+        const results = await Promise.all(scraperPromises);
+        const validLinks = results.flat();
         allLinks.push(...validLinks);
-
-        // EARLY EXIT: If we found high-quality links from a high-priority provider, stop here.
-        if (allLinks.length >= 2) {
-          this.logger.log(`Found ${allLinks.length} valid links for ${title}, finishing early.`);
-          break;
-        }
-      } catch (e) {
-        this.logger.warn(`${scraper.name} failed: ${e.message}`);
-      }
-    }
 
     if (allLinks.length > 0) {
       await this.cacheManager.set(cacheKey, allLinks, 86400000); // 24 hours
@@ -335,7 +333,7 @@ export class ProvidersService {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
             'Referer': url
           },
-          timeout: 5000
+          timeout: 2000
         });
         if (headResponse.status === 200) return true;
       } catch (headError) {
@@ -348,7 +346,7 @@ export class ProvidersService {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
           'Referer': url
         },
-        timeout: 10000,
+        timeout: 4000,
         responseType: 'stream' // Use stream to avoid downloading huge files
       });
 

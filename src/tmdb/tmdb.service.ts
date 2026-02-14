@@ -20,7 +20,7 @@ export class TmdbService {
   private async getCachedRequest(key: string, url: string, params: any, ttl: number = 604800000) {
     const cached = await this.cacheManager.get(key.replace(/[:\s?&]/g, '_'));
     if (cached) {
-      return cached;
+      return this.filterFutureContent(cached);
     }
 
     if (!this.apiKey || this.apiKey.includes('your_tmdb_api_key')) {
@@ -32,11 +32,39 @@ export class TmdbService {
     try {
       const response = await axios.get(url, { params: { ...params, api_key: this.apiKey } });
       await this.cacheManager.set(key.replace(/[:\s?&]/g, '_'), response.data, ttl);
-      return response.data;
+      return this.filterFutureContent(response.data);
     } catch (e) {
       this.logger.error(`TMDB request failed: ${e.message}`);
       throw e;
     }
+  }
+
+  private filterFutureContent(data: any): any {
+    if (!data || !data.results || !Array.isArray(data.results)) {
+      return data;
+    }
+
+    // Get today's date in YYYY-MM-DD format
+    const today = new Date().toISOString().split('T')[0];
+
+    const filteredResults = data.results.filter((item: any) => {
+      // Check for Movie release date
+      if (item.release_date) {
+        return item.release_date <= today;
+      }
+      // Check for TV first air date
+      if (item.first_air_date) {
+        return item.first_air_date <= today;
+      }
+      // If no date is present, usually it's safe to show (or it's obscure), 
+      // but strictly for "future" filtering, we let it pass if we can't prove it's future.
+      return true;
+    });
+
+    return {
+      ...data,
+      results: filteredResults
+    };
   }
 
   async getTrending(type: 'movie' | 'tv' | 'all' = 'movie', page: number = 1) {
