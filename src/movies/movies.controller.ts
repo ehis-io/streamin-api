@@ -10,11 +10,13 @@ export class MoviesController {
 
   @Get('trending')
   getTrending(@Query() query: PaginationDto) {
+    console.log('[MOVIES] Trending request:', query);
     return this.moviesService.getTrending(query.page);
   }
 
   @Get('search')
   search(@Query() query: SearchDto) {
+    console.log('[MOVIES] Search request:', query);
     return this.moviesService.search(query.q, query.page);
   }
 

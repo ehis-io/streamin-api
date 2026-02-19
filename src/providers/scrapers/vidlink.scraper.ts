@@ -16,8 +16,9 @@ export class VidLinkScraper implements Scraper {
     private puppeteerService: PuppeteerService
   ) { }
 
-  async search(query: string, tmdbId?: number, imdbId?: string, malId?: number, priority: number = 0): Promise<ScraperSearchResult[]> {
-    this.logger.log(`Searching for ${query} (TMDB: ${tmdbId}, MAL: ${malId}) [Priority: ${priority}]`);
+  async search(query: string, tmdbId?: number, imdbId?: string, malId?: number, priority: number = 0, mediaType?: string): Promise<ScraperSearchResult[]> {
+    this.logger.log(`Searching for ${query} (TMDB: ${tmdbId}, IMDB: ${imdbId}, MAL: ${malId}, Type: ${mediaType}) [Priority: ${priority}]`);
+    
     if (malId) {
       return [{
         title: `${query} (VidLink Anime)`,
@@ -26,14 +27,17 @@ export class VidLinkScraper implements Scraper {
       }];
     }
 
-    if (!tmdbId) {
-      this.logger.warn('VidLink requires TMDB ID for embedding');
+    const activeType = mediaType === 'tv' ? 'tv' : 'movie';
+    const id = tmdbId || imdbId;
+
+    if (!id) {
+      this.logger.warn('VidLink requires TMDB or IMDB ID');
       return [];
     }
 
     return [{
       title: `${query} (VidLink)`,
-      url: `${this.baseUrl}/movie/${tmdbId}`, // Default to movie URL
+      url: `${this.baseUrl}/${activeType}/${id}`,
       poster: ''
     }];
   }
@@ -132,7 +136,7 @@ export class VidLinkScraper implements Scraper {
           }]);
         }
       });
-    }).catch(error => {
+    }, priority).catch(error => {
       this.logger.error(`VidLink extraction failed: ${error.message}`);
       return [];
     });

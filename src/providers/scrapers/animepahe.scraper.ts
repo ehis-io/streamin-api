@@ -11,7 +11,7 @@ export class AnimePaheScraper implements Scraper {
 
     constructor(private puppeteerService: PuppeteerService) { }
 
-    async search(query: string, tmdbId?: number, imdbId?: string, malId?: number, priority: number = 0): Promise<ScraperSearchResult[]> {
+    async search(query: string, tmdbId?: number, imdbId?: string, malId?: number, priority: number = 0, mediaType?: string): Promise<ScraperSearchResult[]> {
         return this.puppeteerService.withPage(async (page) => {
             // Set User-Agent to look like a real browser
             await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');

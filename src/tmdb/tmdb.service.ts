@@ -3,12 +3,14 @@ import { ConfigService } from '@nestjs/config';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import type { Cache } from 'cache-manager';
 import axios from 'axios';
+import * as https from 'https';
 
 @Injectable()
 export class TmdbService {
   private readonly baseUrl = 'https://api.themoviedb.org/3';
   private readonly apiKey: string;
   private readonly logger = new Logger(TmdbService.name);
+  private readonly httpsAgent = new https.Agent({ family: 4 });
 
   constructor(
     private configService: ConfigService,
@@ -30,11 +32,20 @@ export class TmdbService {
     }
 
     try {
-      const response = await axios.get(url, { params: { ...params, api_key: this.apiKey } });
-      await this.cacheManager.set(key.replace(/[:\s?&]/g, '_'), response.data, ttl);
+      this.logger.debug(`Fetching TMDB: ${url}`);
+      const response = await axios.get(url, { 
+        params: { ...params, api_key: this.apiKey },
+        httpsAgent: this.httpsAgent
+      });
+      try {
+        await this.cacheManager.set(key.replace(/[:\s?&]/g, '_'), response.data, ttl);
+      } catch (cacheError) {
+        this.logger.warn(`Failed to cache TMDB response for ${key}: ${cacheError.message}`);
+      }
       return this.filterFutureContent(response.data);
     } catch (e) {
-      this.logger.error(`TMDB request failed: ${e.message}`);
+      this.logger.error(`TMDB request failed for ${url}: ${e.message}`, e.stack);
+      console.error('[TMDB ERROR]', e);
       throw e;
     }
   }

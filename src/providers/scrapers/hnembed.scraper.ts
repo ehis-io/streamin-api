@@ -14,27 +14,36 @@ export class HnEmbedScraper implements Scraper {
 
   constructor(private puppeteerService: PuppeteerService) { }
 
-  async search(query: string, tmdbId?: number, imdbId?: string, malId?: number, priority: number = 0): Promise<ScraperSearchResult[]> {
-    this.logger.log(`Searching for ${query} (TMDB: ${tmdbId}, IMDB: ${imdbId}) [Priority: ${priority}]`);
+  async search(query: string, tmdbId?: number, imdbId?: string, malId?: number, priority: number = 0, mediaType?: string): Promise<ScraperSearchResult[]> {
+    this.logger.log(`Searching for ${query} (TMDB: ${tmdbId}, IMDB: ${imdbId}, Type: ${mediaType}) [Priority: ${priority}]`);
     if (!imdbId && !tmdbId) {
       this.logger.warn('HnEmbed requires IMDB or TMDB ID');
       return [];
     }
 
     const id = imdbId || tmdbId?.toString();
+    const activeType = mediaType === 'tv' ? 'tv' : 'movie';
     
-    return this.baseUrls.flatMap(baseUrl => [
-      {
-        title: `${query} (${new URL(baseUrl).hostname})`,
-        url: `${baseUrl}/embed/movie/${id}`,
-        poster: ''
-      },
-      {
-        title: `${query} (TV) (${new URL(baseUrl).hostname})`,
-        url: `${baseUrl}/embed/tv/${id}`,
-        poster: ''
+    return this.baseUrls.flatMap(baseUrl => {
+      const results: ScraperSearchResult[] = [];
+      
+      if (!mediaType || activeType === 'movie') {
+        results.push({
+          title: `${query} (${new URL(baseUrl).hostname})`,
+          url: `${baseUrl}/embed/movie/${id}`,
+          poster: ''
+        });
       }
-    ]);
+      
+      if (!mediaType || activeType === 'tv') {
+        results.push({
+          title: `${query} (TV) (${new URL(baseUrl).hostname})`,
+          url: `${baseUrl}/embed/tv/${id}`,
+          poster: ''
+        });
+      }
+      return results;
+    });
   }
 
   async getStreamLinks(url: string, episode?: { season?: number, episode: number, type?: 'sub' | 'dub' }, priority: number = 0): Promise<StreamLink[]> {
@@ -132,7 +141,7 @@ export class HnEmbedScraper implements Scraper {
           }]);
         }
       });
-    }).catch(error => {
+    }, priority).catch(error => {
       this.logger.error(`HnEmbed extraction failed: ${error.message}`);
       return [];
     });

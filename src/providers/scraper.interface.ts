@@ -27,7 +27,7 @@ export interface Scraper {
    * @param malId Optional MAL ID if available
    * @param priority Optional priority for the search operation
    */
-  search(query: string, tmdbId?: number, imdbId?: string, malId?: number, priority?: number): Promise<ScraperSearchResult[]>;
+  search(query: string, tmdbId?: number, imdbId?: string, malId?: number, priority?: number, mediaType?: string): Promise<ScraperSearchResult[]>;
 
   /**
    * Extract stream links from a specific provider url

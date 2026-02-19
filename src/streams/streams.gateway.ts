@@ -68,6 +68,7 @@ export class StreamsGateway implements OnGatewayConnection, OnGatewayDisconnect 
                 (link) => {
                     client.emit('stream-link', { link, requestId: data.requestId });
                 },
+                0
             );
 
             client.emit('streams-complete', { links, requestId: data.requestId });

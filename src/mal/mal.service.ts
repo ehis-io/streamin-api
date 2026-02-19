@@ -39,7 +39,8 @@ export class MALService {
             await this.cacheManager.set(key, data, ttl);
             return data;
         } catch (e) {
-            this.logger.error(`MAL request failed for key ${key}: ${e.message}`);
+            this.logger.error(`MAL request failed for key ${key}: ${e.message}`, e.stack);
+            console.error('[MAL ERROR]', e);
             throw e;
         }
     }

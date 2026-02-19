@@ -16,8 +16,8 @@ export class SimpleScraper implements Scraper {
     { name: 'AutoEmbed', searchUrl: (q) => `https://autoembed.to/movie/${encodeURIComponent(q)}`, selector: 'a.play-link' }
   ];
 
-  async search(query: string, tmdbId?: number, imdbId?: string, malId?: number, priority: number = 0): Promise<ScraperSearchResult[]> {
-    this.logger.log(`Searching for "${query}"`);
+  async search(query: string, tmdbId?: number, imdbId?: string, malId?: number, priority: number = 0, mediaType?: string): Promise<ScraperSearchResult[]> {
+    this.logger.log(`Searching for "${query}" (Type: ${mediaType})`);
     const results: ScraperSearchResult[] = [];
 
     for (const provider of this.providers) {

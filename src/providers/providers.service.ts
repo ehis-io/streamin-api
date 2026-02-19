@@ -47,13 +47,6 @@ export class ProvidersService {
   ): Promise<StreamLink[]> {
     const season = seasonParam ? Number(seasonParam) : undefined;
     const episode = episodeParam ? Number(episodeParam) : undefined;
-    
-    const cacheKey = `streams:${id}:${season || ''}:${episode || ''}:${type}:${mediaType || ''}`;
-    const cached = await this.cacheManager.get<StreamLink[]>(cacheKey);
-    if (cached) {
-      this.logger.log(`Returned cached streams for ${cacheKey}`);
-      return cached;
-    }
 
     // Check Database for persistent storage
     // Ensure ID is numeric for TMDB/MAL providers
@@ -66,28 +59,6 @@ export class ProvidersService {
     let activeMediaType = mediaType;
     if (!activeMediaType) {
       activeMediaType = (season && episode) ? 'tv' : 'movie';
-    }
-
-    const dbLinks = await (this.prisma as any).streamedLink.findMany({
-      where: activeMediaType === 'anime'
-        ? { malId: numericId, season: season || 1, episode: episode || 1 }
-        : { tmdbId: numericId, season: season || null, episode: episode || null }
-    });
-
-    if (dbLinks.length > 0) {
-      const links = dbLinks.map(dbLink => ({
-        url: dbLink.url,
-        quality: dbLink.quality || 'Auto',
-        isM3U8: dbLink.isM3U8,
-        provider: dbLink.provider,
-        type: dbLink.type as 'sub' | 'dub',
-        headers: dbLink.headers ? JSON.parse(dbLink.headers) : undefined
-      }));
-
-      this.logger.log(`Found ${dbLinks.length} streams in DB for ${id}. Skipping re-scrape.`);
-      // Also cache in Redis for faster access
-      await this.cacheManager.set(cacheKey, links, 86400000);
-      return links;
     }
 
     let title = '';
@@ -129,7 +100,7 @@ export class ProvidersService {
       return [];
     }
 
-    this.logger.log(`Resolving streams for ${title} (${activeMediaType}) [Priority: ${priority}]`);
+    this.logger.log(`Resolving streams for ${title} (${activeMediaType}) - S${season} E${episode} [Priority: ${priority}]`);
 
     const allLinks: StreamLink[] = [];
     const activeScrapers = this.scrapers.filter(s =>
@@ -142,10 +113,16 @@ export class ProvidersService {
       try {
         let searchResults: ScraperSearchResult[] = [];
 
-        // Unique key for individual provider mappings
-        const mappingKey = activeMediaType === 'anime'
-          ? `mal:${malId}:${scraper.name}`
-          : `tmdb:${tmdbId}:${scraper.name}`;
+        // Unique key for individual provider mappings - include mediaType and season for TV to avoid collisions
+        let mappingKey = activeMediaType === 'anime'
+          ? `mal:anime:${malId}:${scraper.name}`
+          : `tmdb:${activeMediaType}:${tmdbId}:${scraper.name}`;
+          
+        if (activeMediaType === 'tv' && season) {
+          mappingKey += `:s${season}`;
+        }
+
+        this.logger.debug(`[${scraper.name}] Using mappingKey: ${mappingKey}`);
 
         // Check for existing mapping to skip search
         const mapping = await (this.prisma as any).providerMapping.findUnique({
@@ -159,28 +136,48 @@ export class ProvidersService {
             url: mapping.externalUrl
           }];
         } else {
-          searchResults = await scraper.search(title, tmdbId, imdbId, malId, priority);
+          // For TV shows, specifically include the season in the search query to improve accuracy
+          const searchQuery = (activeMediaType === 'tv' && season) 
+            ? `${title} Season ${season}` 
+            : title;
+            
+          this.logger.debug(`Searching for ${scraper.name} using query: "${searchQuery}"`);
+          searchResults = await scraper.search(searchQuery, tmdbId, imdbId, malId, priority, activeMediaType);
+          
           // Save the first mapping for future use
+          // CRITICAL: Ensure we don't map episode-specific URLs at the show level
           if (searchResults.length > 0) {
             const bestResult = searchResults[0];
-            try {
-              await (this.prisma as any).providerMapping.upsert({
-                where: { mappingKey },
-                update: {
-                  externalUrl: bestResult.url,
-                  tmdbId: tmdbId || null,
-                  malId: malId || null
-                },
-                create: {
-                  mappingKey,
-                  tmdbId: tmdbId || null,
-                  malId: malId || null,
-                  provider: scraper.name,
-                  externalUrl: bestResult.url
-                }
-              });
-            } catch (mapError) {
-              this.logger.warn(`Could not save provider mapping for ${mappingKey}: ${mapError.message}`);
+            const lowerUrl = bestResult.url.toLowerCase();
+            const isEpisodeSpecific = 
+              (lowerUrl.includes('/tv/') && (lowerUrl.match(/\//g) || []).length > 4) ||
+              lowerUrl.includes('episode=') ||
+              lowerUrl.includes('season=') ||
+              lowerUrl.includes('/play/') ||
+              lowerUrl.includes('/watch/');
+            
+            if (!isEpisodeSpecific) {
+              try {
+                await (this.prisma as any).providerMapping.upsert({
+                  where: { mappingKey },
+                  update: {
+                    externalUrl: bestResult.url,
+                    tmdbId: tmdbId || null,
+                    malId: malId || null
+                  },
+                  create: {
+                    mappingKey,
+                    tmdbId: tmdbId || null,
+                    malId: malId || null,
+                    provider: scraper.name,
+                    externalUrl: bestResult.url
+                  }
+                });
+              } catch (mapError) {
+                this.logger.warn(`Could not save provider mapping for ${mappingKey}: ${mapError.message}`);
+              }
+            } else {
+              this.logger.debug(`Skipping show-level mapping for episode-specific URL: ${bestResult.url}`);
             }
           }
         }
@@ -209,7 +206,7 @@ export class ProvidersService {
         const validationResults = await Promise.all(
           flatLinks.map(async (link) => {
             try {
-              const isValid = await this.validateStream(link.url);
+              const isValid = await this.validateStream(link.url, priority);
               if (isValid) {
                 if (onLinkFound) onLinkFound(link);
                 return link;
@@ -233,59 +230,21 @@ export class ProvidersService {
     // Wait for all scrapers to complete (or fail)
     await Promise.all(scraperPromises);
 
-    if (allLinks.length > 0) {
-      await this.cacheManager.set(cacheKey, allLinks, 86400000); // 24 hours
-
-      // Persist to Database for long-term cache
-      try {
-        const createManyParams = allLinks.map(link => ({
-          tmdbId: activeMediaType !== 'anime' ? tmdbId : null,
-          malId: activeMediaType === 'anime' ? malId : null,
-          season: season || (activeMediaType === 'anime' ? 1 : null),
-          episode: episode || null,
-          url: link.url,
-          quality: link.quality,
-          isM3U8: !!link.isM3U8,
-          provider: link.provider || 'Unknown',
-          type: link.type || null,
-          headers: link.headers ? JSON.stringify(link.headers) : null
-        }));
-
-        // Avoid duplicates if same URL exists for same ID/EP
-        for (const data of createManyParams) {
-          try {
-            const existing = await (this.prisma as any).streamedLink.findFirst({
-              where: {
-                url: data.url,
-                tmdbId: data.tmdbId,
-                malId: data.malId,
-                season: data.season,
-                episode: data.episode,
-                type: data.type
-              }
-            });
-
-            if (!existing) {
-              await (this.prisma as any).streamedLink.create({ data });
-            }
-          } catch (e) {
-            this.logger.warn(`Failed to save link ${data.url} to DB: ${e.message}`);
-          }
-        }
-      } catch (dbError) {
-        this.logger.warn(`Failed to save streams to DB: ${dbError.message}`);
-      }
-    }
-
     return allLinks;
   }
 
-  private async validateStream(url: string): Promise<boolean> {
+  private async validateStream(url: string, priority: number = 0): Promise<boolean> {
     const domain = new URL(url).hostname;
     const isRestricted = domain.includes('vidsrc') ||
       domain.includes('vidlink.pro') ||
       domain.includes('gogoanime') ||
       domain.includes('9animetv.be');
+
+    // Fast-path for direct M3U8 links from trusted high-priority scrapers if they're not restricted
+    if (!isRestricted && url.includes('.m3u8')) {
+      this.logger.debug(`Fast-tracking validation for M3U8: ${domain}`);
+      return true;
+    }
 
     if (!isRestricted) {
       return this.executeValidation(url);
@@ -356,7 +315,7 @@ export class ProvidersService {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
           'Referer': url
         },
-        timeout: 4000,
+        timeout: 8000, // Increased from 4s to 8s to be less strict
         responseType: 'stream' // Use stream to avoid downloading huge files
       });
 
@@ -426,30 +385,17 @@ export class ProvidersService {
         if (!item) break;
 
         try {
-          // Check if already in DB to skip expensive search
-          const numericId = parseInt(item.id);
-          const existing = await (this.prisma as any).streamedLink.findFirst({
-            where: item.mediaType === 'anime'
-              ? { malId: numericId, episode: 1 }
-              : { tmdbId: numericId, season: item.mediaType === 'tv' ? 1 : null, episode: item.mediaType === 'tv' ? 1 : null }
-          });
-
-          if (existing) {
-            this.logger.debug(`Skipping prefetch for ${item.id} - already in DB`);
-            continue;
-          }
-
           this.logger.debug(`Proactively resolving streams for ${item.id} (${item.mediaType})`);
           // Resolve links (this also saves to DB and cache)
-          await this.findStreamLinks(
-            item.id,
-            item.mediaType === 'tv' ? 1 : undefined,
-            item.mediaType === 'tv' ? 1 : (item.mediaType === 'anime' ? 1 : undefined),
-            'sub',
-            item.mediaType,
-            onLinkFound ? (link) => onLinkFound(item.id, link) : undefined,
-            1 // LOW PRIORITY for prefetch
-          );
+            await this.findStreamLinks(
+              item.id,
+              item.mediaType === 'tv' ? 1 : undefined,
+              item.mediaType === 'tv' ? 1 : (item.mediaType === 'anime' ? 1 : undefined),
+              'sub',
+              item.mediaType,
+              onLinkFound ? (link) => onLinkFound(item.id, link) : undefined,
+              1 // LOW PRIORITY for prefetch
+            );
         } catch (err) {
           this.logger.debug(`Background prefetch failed for ${item.id}: ${err.message}`);
         }

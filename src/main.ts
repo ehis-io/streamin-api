@@ -3,8 +3,14 @@ import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
+import { setGlobalDispatcher, Agent } from 'undici';
+import * as dns from 'dns';
 
 async function bootstrap() {
+  // Force IPv4 for native fetch (used by myanimelist-wrapper)
+  setGlobalDispatcher(new Agent({ connect: { family: 4 } }));
+  dns.setDefaultResultOrder('ipv4first');
+
   const app = await NestFactory.create(AppModule);
   app.useGlobalPipes(new ValidationPipe({ transform: true }));
   app.useGlobalFilters(new HttpExceptionFilter());

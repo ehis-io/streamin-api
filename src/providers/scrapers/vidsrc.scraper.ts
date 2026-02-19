@@ -16,8 +16,8 @@ export class VidSrcScraper implements Scraper {
 
   constructor(private puppeteerService: PuppeteerService) { }
 
-  async search(query: string, tmdbId?: number, imdbId?: string, malId?: number, priority: number = 0): Promise<ScraperSearchResult[]> {
-    this.logger.log(`Searching for ${query} (TMDB: ${tmdbId}, IMDB: ${imdbId}, MAL: ${malId}) [Priority: ${priority}]`);
+  async search(query: string, tmdbId?: number, imdbId?: string, malId?: number, priority: number = 0, mediaType?: string): Promise<ScraperSearchResult[]> {
+    this.logger.log(`Searching for ${query} (TMDB: ${tmdbId}, IMDB: ${imdbId}, MAL: ${malId}, Type: ${mediaType}) [Priority: ${priority}]`);
     // VidSrc-embed.ru works with both TMDB and IMDB IDs
     // Example: https://vidsrc-embed.ru/embed/movie?imdb=tt36741457
     // TEMP: Skip VidSrc if TMDB ID is not present
@@ -32,25 +32,28 @@ export class VidSrcScraper implements Scraper {
     }
 
     // Treat 'anime' media type as 'tv' if we have a TMDB ID
-    // (Most providers index anime as TV shows via TMDB)
-    const type = 'tv'; 
+    const activeType = mediaType === 'movie' ? 'movie' : 'tv';
 
     const idParam = imdbId ? `imdb=${imdbId}` : `tmdb=${tmdbId}`;
 
     return this.baseUrls.flatMap(baseUrl => {
       const results: ScraperSearchResult[] = [];
-      // Add movie option (default)
-      results.push({
-        title: `${query} (${new URL(baseUrl).hostname})`,
-        url: `${baseUrl}/embed/movie?${idParam}`,
-        poster: ''
-      });
-      // Add TV option
-      results.push({
-        title: `${query} (TV) (${new URL(baseUrl).hostname})`,
-        url: `${baseUrl}/embed/tv?${idParam}`,
-        poster: ''
-      });
+      
+      if (!mediaType || activeType === 'movie') {
+        results.push({
+          title: `${query} (${new URL(baseUrl).hostname})`,
+          url: `${baseUrl}/embed/movie?${idParam}`,
+          poster: ''
+        });
+      }
+      
+      if (!mediaType || activeType === 'tv') {
+        results.push({
+          title: `${query} (TV) (${new URL(baseUrl).hostname})`,
+          url: `${baseUrl}/embed/tv?${idParam}`,
+          poster: ''
+        });
+      }
       return results;
     });
   }
@@ -87,32 +90,28 @@ export class VidSrcScraper implements Scraper {
         const m3u8Links: StreamLink[] = [];
         let isResolved = false;
 
-        const cleanup = () => {
-          page.removeAllListeners('request');
-        };
-
         const resolveLinks = (links: StreamLink[]) => {
           if (isResolved) return;
           isResolved = true;
-          cleanup();
+          page.removeAllListeners('request');
           resolve(links);
         };
 
-        // Reuse interception for M3U8 detection
         page.on('request', (request) => {
           const reqUrl = request.url();
           if (reqUrl.includes('.m3u8') && !reqUrl.includes('heartbeat')) {
-            this.logger.debug(`Found M3U8 link early: ${reqUrl}`);
-            m3u8Links.push({
+            const link = {
               url: reqUrl,
               quality: 'Auto',
               isM3U8: true,
               headers: request.headers()
-            });
+            };
+            m3u8Links.push(link);
 
-            // If we found a master playlist (high quality indicator), resolve early
+            // Fast exit: if it's a master playlist, we're likely done
             if (reqUrl.includes('master') || reqUrl.includes('index.m3u8')) {
-              resolveLinks(m3u8Links);
+              this.logger.debug(`Found master playlist, resolving immediately for speed`);
+              resolveLinks([link]);
             }
           }
         });
@@ -138,11 +137,11 @@ export class VidSrcScraper implements Scraper {
             url: embedUrl,
             quality: 'Auto',
             isM3U8: false,
-            headers: { 'Referer': 'https://vicsrc.to/' }
+            headers: { 'Referer': 'https://vidsrc.to/' }
           }]);
         }
       });
-    }).catch(error => {
+    }, priority).catch(error => {
       this.logger.error(`VidSrc extraction failed: ${error.message}`);
       return [];
     });

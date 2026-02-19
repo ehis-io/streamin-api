@@ -10,11 +10,13 @@ export class AnimesController {
 
     @Get('trending')
     getTrending(@Query() query: PaginationDto) {
+        console.log('[ANIMES] Trending request:', query);
         return this.animesService.getTrending(query.page);
     }
 
     @Get('search')
     search(@Query() query: SearchDto) {
+        console.log('[ANIMES] Search request:', query);
         return this.animesService.search(query.q, query.page);
     }
 

@@ -20,7 +20,7 @@ export class GogoAnimeScraper implements Scraper {
         'Upgrade-Insecure-Requests': '1'
     };
 
-    async search(query: string, tmdbId?: number, imdbId?: string, malId?: number, priority: number = 0): Promise<ScraperSearchResult[]> {
+    async search(query: string, tmdbId?: number, imdbId?: string, malId?: number, priority: number = 0, mediaType?: string): Promise<ScraperSearchResult[]> {
         this.logger.log(`Searching for anime: ${query} [Priority: ${priority}]`);
         try {
             const searchUrl = `${this.baseUrl}/?s=${encodeURIComponent(query).replace(/%20/g, '+')}`;
