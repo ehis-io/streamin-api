@@ -40,31 +40,32 @@ export class TmdbService {
   }
 
   private filterFutureContent(data: any): any {
-    if (!data || !data.results || !Array.isArray(data.results)) {
-      return data;
-    }
+    if (!data) return data;
 
     // Get today's date in YYYY-MM-DD format
     const today = new Date().toISOString().split('T')[0];
 
-    const filteredResults = data.results.filter((item: any) => {
-      // Check for Movie release date
-      if (item.release_date) {
-        return item.release_date <= today;
-      }
-      // Check for TV first air date
-      if (item.first_air_date) {
-        return item.first_air_date <= today;
-      }
-      // If no date is present, usually it's safe to show (or it's obscure), 
-      // but strictly for "future" filtering, we let it pass if we can't prove it's future.
-      return true;
-    });
-
-    return {
-      ...data,
-      results: filteredResults
+    // Helper to check if an item is released
+    const isReleased = (item: any) => {
+      const releaseDate = item.release_date || item.first_air_date;
+      if (!releaseDate) return false; // Exclude if no date (upcoming/TBA)
+      return releaseDate <= today;
     };
+
+    // If it's a list response
+    if (data.results && Array.isArray(data.results)) {
+      return {
+        ...data,
+        results: data.results.filter(isReleased)
+      };
+    }
+
+    // If it's a single item response (e.g. details)
+    if (data.id && (data.release_date || data.first_air_date || data.status)) {
+      return isReleased(data) ? data : null;
+    }
+
+    return data;
   }
 
   async getTrending(type: 'movie' | 'tv' | 'all' = 'movie', page: number = 1) {

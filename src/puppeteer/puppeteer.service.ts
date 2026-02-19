@@ -7,7 +7,7 @@ import { Browser, Page } from 'puppeteer';
 export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PuppeteerService.name);
   private browser: Browser | null = null;
-  private readonly maxPages = 3; // Keep it low to avoid OOM
+  private readonly maxPages = 5; // Increased for better performance
   private activePages = 0;
   private queue: (() => Promise<void>)[] = [];
 
@@ -47,6 +47,8 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
           '--disable-gpu',
           '--no-zygote',
           '--no-first-run',
+          '--disable-extensions',
+          '--disable-component-update',
         ],
       }) as Browser;
       this.logger.log('Puppeteer browser launched successfully');
@@ -76,7 +78,7 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
       // Speed Optimization: Block unnecessary resources and ads/tracking
       await page.setRequestInterception(true);
       
-      const blockedResources = ['image', 'stylesheet', 'font', 'media'];
+      const blockedResources = ['image', 'stylesheet', 'font', 'media', 'other'];
       const blockedDomains = [
         'google-analytics.com',
         'googletagmanager.com',
@@ -84,12 +86,22 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
         'onesignal.com',
         'adsbygoogle',
         'crashlytics.com',
-        'facebook.net'
+        'facebook.net',
+        'cloudfront.net',
+        'hotjar.com',
+        'sentry.io',
+        'mixpanel.com'
       ];
 
       page.on('request', (request) => {
         const url = request.url().toLowerCase();
         const resourceType = request.resourceType();
+
+        // ALWAYS allow M3U8 discovery
+        if (url.includes('.m3u8')) {
+          request.continue();
+          return;
+        }
 
         if (
           blockedResources.includes(resourceType) ||

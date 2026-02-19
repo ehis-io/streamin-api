@@ -14,7 +14,7 @@ export class ProvidersService {
   private readonly validationQueues = new Map<string, (() => Promise<void>)[]>();
   private readonly activeValidations = new Map<string, number>();
   private readonly coolingDownDomains = new Map<string, number>();
-  private readonly MAX_CONCURRENT_PER_DOMAIN = 2;
+  private readonly MAX_CONCURRENT_PER_DOMAIN = 3;
   private readonly RETRY_DELAY_MS = 5000;
   private readonly COOL_DOWN_MS = 30000;
   private readonly MAX_RETRIES = 3;
@@ -140,113 +140,102 @@ export class ProvidersService {
       !s.supportedTypes || s.supportedTypes.includes(activeMediaType!)
     );
 
-        // Batch scrapers to avoid overloading system resources (e.g., too many browser instances)
-        const BATCH_SIZE = 2;
-        for (let i = 0; i < activeScrapers.length; i += BATCH_SIZE) {
-            const batch = activeScrapers.slice(i, i + BATCH_SIZE);
-            this.logger.log(`Processing batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(activeScrapers.length / BATCH_SIZE)} (${batch.map(s => s.name).join(', ')})`);
+    // Run ALL scrapers in parallel for maximum speed. 
+    // PuppeteerService handles queuing to avoid resource exhaustion.
+    const scraperPromises = activeScrapers.map(async (scraper) => {
+      try {
+        let searchResults: ScraperSearchResult[] = [];
 
-            const batchPromises = batch.map(async (scraper) => {
-                try {
-                    let searchResults: ScraperSearchResult[] = [];
+        // Unique key for individual provider mappings
+        const mappingKey = activeMediaType === 'anime'
+          ? `mal:${malId}:${scraper.name}`
+          : `tmdb:${tmdbId}:${scraper.name}`;
 
-                    // Unique key for individual provider mappings
-                    const mappingKey = activeMediaType === 'anime'
-                        ? `mal:${malId}:${scraper.name}`
-                        : `tmdb:${tmdbId}:${scraper.name}`;
+        // Check for existing mapping to skip search
+        const mapping = await (this.prisma as any).providerMapping.findUnique({
+          where: { mappingKey }
+        });
 
-                    // Check for existing mapping to skip search
-                    const mapping = await (this.prisma as any).providerMapping.findUnique({
-                        where: { mappingKey }
-                    });
-
-                    if (mapping) {
-                        this.logger.debug(`Using mapped URL for ${scraper.name}: ${mapping.externalUrl}`);
-                        searchResults = [{
-                            title: title || 'Media',
-                            url: mapping.externalUrl
-                        }];
-                    } else {
-                        searchResults = await scraper.search(title, tmdbId, imdbId, malId);
-                        // Save the first mapping for future use
-                        if (searchResults.length > 0) {
-                            const bestResult = searchResults[0];
-                            try {
-                                await (this.prisma as any).providerMapping.upsert({
-                                    where: { mappingKey },
-                                    update: {
-                                        externalUrl: bestResult.url,
-                                        tmdbId: tmdbId || null,
-                                        malId: malId || null
-                                    },
-                                    create: {
-                                        mappingKey,
-                                        tmdbId: tmdbId || null,
-                                        malId: malId || null,
-                                        provider: scraper.name,
-                                        externalUrl: bestResult.url
-                                    }
-                                });
-                            } catch (mapError) {
-                                this.logger.warn(`Could not save provider mapping for ${mappingKey}: ${mapError.message}`);
-                            }
-                        }
-                    }
-
-                    const scraperLinksPromises = searchResults.map(async (result) => {
-                        try {
-                            const streamParams = (activeMediaType === 'anime' || (season && episode))
-                                ? { season: season || 1, episode: episode || 1, type }
-                                : undefined;
-
-                            const links = await scraper.getStreamLinks(result.url, streamParams);
-                            return links.map(l => ({
-                                ...l,
-                                provider: result.title.includes('(') ? result.title : `${scraper.name} (${new URL(result.url).hostname})`
-                            }) as (StreamLink & { provider: string }));
-                        } catch (e) {
-                            this.logger.warn(`${scraper.name} mirror ${result.url} failed: ${e.message}`);
-                            return [];
-                        }
-                    });
-
-                    const nestedResults = await Promise.all(scraperLinksPromises);
-                    const flatLinks = nestedResults.flat();
-
-                    // Validate streams
-                    const validationResults = await Promise.all(
-                        flatLinks.map(async (link) => {
-                            try {
-                                const isValid = await this.validateStream(link.url);
-                                if (isValid) {
-                                    if (onLinkFound) onLinkFound(link);
-                                    return link;
-                                }
-                            } catch (valError) {
-                                this.logger.warn(`Validation crashed for ${link.url}: ${valError.message}`);
-                            }
-                            return null;
-                        })
-                    );
-
-                    return validationResults.filter((l): l is StreamLink & { provider: string } => l !== null);
-                } catch (e) {
-                    this.logger.error(`${scraper.name} CRITICAL FAILURE: ${e.message}`);
-                    return [];
+        if (mapping) {
+          this.logger.debug(`Using mapped URL for ${scraper.name}: ${mapping.externalUrl}`);
+          searchResults = [{
+            title: title || 'Media',
+            url: mapping.externalUrl
+          }];
+        } else {
+          searchResults = await scraper.search(title, tmdbId, imdbId, malId);
+          // Save the first mapping for future use
+          if (searchResults.length > 0) {
+            const bestResult = searchResults[0];
+            try {
+              await (this.prisma as any).providerMapping.upsert({
+                where: { mappingKey },
+                update: {
+                  externalUrl: bestResult.url,
+                  tmdbId: tmdbId || null,
+                  malId: malId || null
+                },
+                create: {
+                  mappingKey,
+                  tmdbId: tmdbId || null,
+                  malId: malId || null,
+                  provider: scraper.name,
+                  externalUrl: bestResult.url
                 }
-            });
-
-            // Wait for current batch to finish before starting next batch
-            const batchResults = await Promise.all(batchPromises);
-            const validLinks = batchResults.flat();
-            allLinks.push(...validLinks);
-
-            // Early exit check after each batch
-            if (allLinks.length >= 2) {
-                this.logger.log(`Found ${allLinks.length} valid links, finishing early.`);
-                break;
+              });
+            } catch (mapError) {
+              this.logger.warn(`Could not save provider mapping for ${mappingKey}: ${mapError.message}`);
             }
+          }
         }
+
+        const scraperLinksPromises = searchResults.map(async (result) => {
+          try {
+            const streamParams = (activeMediaType === 'anime' || (season && episode))
+              ? { season: season || 1, episode: episode || 1, type }
+              : undefined;
+
+            const links = await scraper.getStreamLinks(result.url, streamParams);
+            return links.map(l => ({
+              ...l,
+              provider: result.title.includes('(') ? result.title : `${scraper.name} (${new URL(result.url).hostname})`
+            }) as (StreamLink & { provider: string }));
+          } catch (e) {
+            this.logger.warn(`${scraper.name} mirror ${result.url} failed: ${e.message}`);
+            return [];
+          }
+        });
+
+        const nestedResults = await Promise.all(scraperLinksPromises);
+        const flatLinks = nestedResults.flat();
+
+        // Validate streams
+        const validationResults = await Promise.all(
+          flatLinks.map(async (link) => {
+            try {
+              const isValid = await this.validateStream(link.url);
+              if (isValid) {
+                if (onLinkFound) onLinkFound(link);
+                return link;
+              }
+            } catch (valError) {
+              this.logger.warn(`Validation crashed for ${link.url}: ${valError.message}`);
+            }
+            return null;
+          })
+        );
+
+        const validLinks = validationResults.filter((l): l is StreamLink & { provider: string } => l !== null);
+        allLinks.push(...validLinks);
+        return validLinks;
+      } catch (e) {
+        this.logger.error(`${scraper.name} CRITICAL FAILURE: ${e.message}`);
+        return [];
+      }
+    });
+
+    // Wait for all scrapers to complete (or fail)
+    await Promise.all(scraperPromises);
 
     if (allLinks.length > 0) {
       await this.cacheManager.set(cacheKey, allLinks, 86400000); // 24 hours
