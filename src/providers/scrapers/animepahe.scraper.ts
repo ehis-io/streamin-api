@@ -11,7 +11,7 @@ export class AnimePaheScraper implements Scraper {
 
     constructor(private puppeteerService: PuppeteerService) { }
 
-    async search(query: string, tmdbId?: number, imdbId?: string, malId?: number): Promise<ScraperSearchResult[]> {
+    async search(query: string, tmdbId?: number, imdbId?: string, malId?: number, priority: number = 0): Promise<ScraperSearchResult[]> {
         return this.puppeteerService.withPage(async (page) => {
             // Set User-Agent to look like a real browser
             await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
@@ -52,13 +52,13 @@ export class AnimePaheScraper implements Scraper {
             }, this.baseUrl);
 
             return results as ScraperSearchResult[];
-        }).catch(e => {
+        }, priority).catch(e => {
             this.logger.error(`AnimePahe Puppeteer search failed: ${e.message}`);
             return [];
         });
     }
 
-    async getStreamLinks(url: string, episode?: { season?: number, episode: number, type?: 'sub' | 'dub' }): Promise<StreamLink[]> {
+    async getStreamLinks(url: string, episode?: { season?: number, episode: number, type?: 'sub' | 'dub' }, priority: number = 0): Promise<StreamLink[]> {
         if (!episode || !episode.episode) return [];
 
         return this.puppeteerService.withPage(async (page) => {
@@ -135,7 +135,7 @@ export class AnimePaheScraper implements Scraper {
                     'Origin': 'https://kwik.cx'
                 }
             }));
-        }).catch(e => {
+        }, priority).catch(e => {
             this.logger.error(`AnimePahe Puppeteer scraping failed: ${e.message}`);
             return [];
         });

@@ -16,7 +16,8 @@ export class VidLinkScraper implements Scraper {
     private puppeteerService: PuppeteerService
   ) { }
 
-  async search(query: string, tmdbId?: number, imdbId?: string, malId?: number): Promise<ScraperSearchResult[]> {
+  async search(query: string, tmdbId?: number, imdbId?: string, malId?: number, priority: number = 0): Promise<ScraperSearchResult[]> {
+    this.logger.log(`Searching for ${query} (TMDB: ${tmdbId}, MAL: ${malId}) [Priority: ${priority}]`);
     if (malId) {
       return [{
         title: `${query} (VidLink Anime)`,
@@ -37,8 +38,8 @@ export class VidLinkScraper implements Scraper {
     }];
   }
 
-  async getStreamLinks(url: string, episode?: { season?: number, episode: number, type?: 'sub' | 'dub' }): Promise<StreamLink[]> {
-    this.logger.log(`Attempting HLS extraction for VidLink: ${url}`);
+  async getStreamLinks(url: string, episode?: { season?: number, episode: number, type?: 'sub' | 'dub' }, priority: number = 0): Promise<StreamLink[]> {
+    this.logger.log(`Attempting HLS extraction for VidLink: ${url} [Priority: ${priority}]`);
 
     return this.puppeteerService.withPage(async (page) => {
       await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36');

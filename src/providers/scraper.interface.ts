@@ -25,13 +25,15 @@ export interface Scraper {
    * @param tmdbId Optional TMDB ID if available
    * @param imdbId Optional IMDB ID if available
    * @param malId Optional MAL ID if available
+   * @param priority Optional priority for the search operation
    */
-  search(query: string, tmdbId?: number, imdbId?: string, malId?: number): Promise<ScraperSearchResult[]>;
+  search(query: string, tmdbId?: number, imdbId?: string, malId?: number, priority?: number): Promise<ScraperSearchResult[]>;
 
   /**
    * Extract stream links from a specific provider url
+   * @param priority Optional priority for the stream link extraction operation
    */
-  getStreamLinks(url: string, episode?: { season?: number, episode: number, type?: 'sub' | 'dub' }): Promise<StreamLink[]>;
+  getStreamLinks(url: string, episode?: { season?: number, episode: number, type?: 'sub' | 'dub' }, priority?: number): Promise<StreamLink[]>;
 }
 
 export const SCRAPER_TOKEN = Symbol('SCRAPER_TOKEN');

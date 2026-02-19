@@ -20,7 +20,8 @@ export class GogoAnimeScraper implements Scraper {
         'Upgrade-Insecure-Requests': '1'
     };
 
-    async search(query: string, tmdbId?: number, imdbId?: string, malId?: number): Promise<ScraperSearchResult[]> {
+    async search(query: string, tmdbId?: number, imdbId?: string, malId?: number, priority: number = 0): Promise<ScraperSearchResult[]> {
+        this.logger.log(`Searching for anime: ${query} [Priority: ${priority}]`);
         try {
             const searchUrl = `${this.baseUrl}/?s=${encodeURIComponent(query).replace(/%20/g, '+')}`;
             this.logger.log(`GogoAnime searching: ${searchUrl}`);
@@ -69,7 +70,7 @@ export class GogoAnimeScraper implements Scraper {
         }
     }
 
-    async getStreamLinks(url: string, episode?: { season?: number, episode: number, type?: 'sub' | 'dub' }): Promise<StreamLink[]> {
+    async getStreamLinks(url: string, episode?: { season?: number, episode: number, type?: 'sub' | 'dub' }, priority: number = 0): Promise<StreamLink[]> {
         if (!episode || !episode.episode) return [];
 
         try {

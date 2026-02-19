@@ -16,7 +16,8 @@ export class VidSrcScraper implements Scraper {
 
   constructor(private puppeteerService: PuppeteerService) { }
 
-  async search(query: string, tmdbId?: number, imdbId?: string, malId?: number): Promise<ScraperSearchResult[]> {
+  async search(query: string, tmdbId?: number, imdbId?: string, malId?: number, priority: number = 0): Promise<ScraperSearchResult[]> {
+    this.logger.log(`Searching for ${query} (TMDB: ${tmdbId}, IMDB: ${imdbId}, MAL: ${malId}) [Priority: ${priority}]`);
     // VidSrc-embed.ru works with both TMDB and IMDB IDs
     // Example: https://vidsrc-embed.ru/embed/movie?imdb=tt36741457
     // TEMP: Skip VidSrc if TMDB ID is not present
@@ -54,8 +55,8 @@ export class VidSrcScraper implements Scraper {
     });
   }
 
-  async getStreamLinks(url: string, episode?: { season?: number, episode: number, type?: 'sub' | 'dub' }): Promise<StreamLink[]> {
-    this.logger.log(`Attempting HLS extraction for VidSrc: ${url}`);
+  async getStreamLinks(url: string, episode?: { season?: number, episode: number, type?: 'sub' | 'dub' }, priority: number = 0): Promise<StreamLink[]> {
+    this.logger.log(`Attempting HLS extraction for VidSrc: ${url} [Priority: ${priority}]`);
 
     return this.puppeteerService.withPage(async (page) => {
       await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36');

@@ -38,12 +38,16 @@ export class ProvidersService {
 
   async findStreamLinks(
     id: string,
-    season?: number,
-    episode?: number,
+    seasonParam?: number,
+    episodeParam?: number,
     type: 'sub' | 'dub' = 'sub',
     mediaType?: string,
-    onLinkFound?: (link: StreamLink) => void
+    onLinkFound?: (link: StreamLink) => void,
+    priority: number = 0
   ): Promise<StreamLink[]> {
+    const season = seasonParam ? Number(seasonParam) : undefined;
+    const episode = episodeParam ? Number(episodeParam) : undefined;
+    
     const cacheKey = `streams:${id}:${season || ''}:${episode || ''}:${type}:${mediaType || ''}`;
     const cached = await this.cacheManager.get<StreamLink[]>(cacheKey);
     if (cached) {
@@ -80,18 +84,10 @@ export class ProvidersService {
         headers: dbLink.headers ? JSON.parse(dbLink.headers) : undefined
       }));
 
-      // Check if we need to re-scrape
-      const hasFewLinks = dbLinks.length < 2;
-      const isStale = dbLinks.some(link => Date.now() - new Date(link.updatedAt).getTime() > 24 * 60 * 60 * 1000); // 24 hours
-
-      if (!hasFewLinks && !isStale) {
-        this.logger.log(`Found ${dbLinks.length} streams in DB for ${id}`);
-        // Also cache in Redis for faster access
-        await this.cacheManager.set(cacheKey, links, 86400000);
-        return links;
-      }
-      
-      this.logger.log(`Found ${dbLinks.length} streams in DB, but re-scraping (few links or stale).`);
+      this.logger.log(`Found ${dbLinks.length} streams in DB for ${id}. Skipping re-scrape.`);
+      // Also cache in Redis for faster access
+      await this.cacheManager.set(cacheKey, links, 86400000);
+      return links;
     }
 
     let title = '';
@@ -133,7 +129,7 @@ export class ProvidersService {
       return [];
     }
 
-    this.logger.log(`Resolving streams for ${title} (${activeMediaType})`);
+    this.logger.log(`Resolving streams for ${title} (${activeMediaType}) [Priority: ${priority}]`);
 
     const allLinks: StreamLink[] = [];
     const activeScrapers = this.scrapers.filter(s =>
@@ -163,7 +159,7 @@ export class ProvidersService {
             url: mapping.externalUrl
           }];
         } else {
-          searchResults = await scraper.search(title, tmdbId, imdbId, malId);
+          searchResults = await scraper.search(title, tmdbId, imdbId, malId, priority);
           // Save the first mapping for future use
           if (searchResults.length > 0) {
             const bestResult = searchResults[0];
@@ -195,7 +191,7 @@ export class ProvidersService {
               ? { season: season || 1, episode: episode || 1, type }
               : undefined;
 
-            const links = await scraper.getStreamLinks(result.url, streamParams);
+            const links = await scraper.getStreamLinks(result.url, streamParams, priority);
             return links.map(l => ({
               ...l,
               provider: result.title.includes('(') ? result.title : `${scraper.name} (${new URL(result.url).hostname})`
@@ -451,7 +447,8 @@ export class ProvidersService {
             item.mediaType === 'tv' ? 1 : (item.mediaType === 'anime' ? 1 : undefined),
             'sub',
             item.mediaType,
-            onLinkFound ? (link) => onLinkFound(item.id, link) : undefined
+            onLinkFound ? (link) => onLinkFound(item.id, link) : undefined,
+            1 // LOW PRIORITY for prefetch
           );
         } catch (err) {
           this.logger.debug(`Background prefetch failed for ${item.id}: ${err.message}`);

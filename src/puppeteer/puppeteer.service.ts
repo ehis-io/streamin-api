@@ -9,7 +9,7 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
   private browser: Browser | null = null;
   private readonly maxPages = 5; // Increased for better performance
   private activePages = 0;
-  private queue: (() => Promise<void>)[] = [];
+  private queue: { priority: number; resolve: () => void }[] = [];
 
   constructor() {
     puppeteer.use(StealthPlugin());
@@ -58,22 +58,29 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  async withPage<T>(fn: (page: Page) => Promise<T>): Promise<T> {
+  async withPage<T>(fn: (page: Page) => Promise<T>, priority: number = 0): Promise<T> {
     if (this.activePages >= this.maxPages) {
-      this.logger.debug(`Max pages reached (${this.maxPages}). Queuing request...`);
+      this.logger.debug(`Max pages reached (${this.maxPages}). Queuing request with priority ${priority}...`);
       await new Promise<void>((resolve) => {
-        this.queue.push(async () => {
-          resolve();
-        });
+        this.queue.push({ priority, resolve });
+        // Sort queue: lower priority number = higher priority
+        this.queue.sort((a, b) => a.priority - b.priority);
       });
     }
 
     this.activePages++;
     await this.ensureBrowser();
 
+    let context: any = null;
     let page: Page | null = null;
     try {
-      page = await this.browser!.newPage();
+      // Create a new isolated browser context (incognito) for every request
+      context = await this.browser!.createBrowserContext();
+      page = await context.newPage();
+
+      if (!page) {
+        throw new Error('Failed to create a new page');
+      }
       
       // Speed Optimization: Block unnecessary resources and ads/tracking
       await page.setRequestInterception(true);
@@ -123,7 +130,10 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
       throw error;
     } finally {
       if (page) {
-        await page.close().catch(e => this.logger.warn(`Failed to close page: ${e.message}`));
+        await (page as any).close().catch((e: any) => this.logger.warn(`Failed to close page: ${e.message}`));
+      }
+      if (context) {
+        await (context as any).close().catch((e: any) => this.logger.warn(`Failed to close browser context: ${e.message}`));
       }
       this.activePages--;
       this.processQueue();
@@ -132,10 +142,8 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
 
   private processQueue() {
     if (this.queue.length > 0 && this.activePages < this.maxPages) {
-      const next = this.queue.shift();
-      if (next) {
-        next();
-      }
+      const { resolve } = this.queue.shift()!;
+      resolve();
     }
   }
 }
