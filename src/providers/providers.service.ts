@@ -302,7 +302,7 @@ export class ProvidersService {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
             'Referer': url
           },
-          timeout: 2000
+          timeout: 1500 // Reduced from 2s to 1.5s
         });
         if (headResponse.status === 200) return true;
       } catch (headError) {
@@ -315,7 +315,7 @@ export class ProvidersService {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
           'Referer': url
         },
-        timeout: 8000, // Increased from 4s to 8s to be less strict
+        timeout: 5000, // Reduced from 8s to 5s for faster fail-fast
         responseType: 'stream' // Use stream to avoid downloading huge files
       });
 
@@ -338,8 +338,9 @@ export class ProvidersService {
             resolve(false);
           }
 
-          // If we've read 10KB and haven't found error text, assume it's valid
-          if (buffer.length > 10240) {
+          // If we've read 2KB (reduced from 10KB) and haven't found error text, assume it's valid
+          // This speeds up validation significantly for working streams
+          if (buffer.length > 2048) {
             stream.destroy();
             resolve(true);
           }
