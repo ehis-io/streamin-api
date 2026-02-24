@@ -8,17 +8,18 @@ import * as dns from 'dns';
 
 async function bootstrap() {
   // Force IPv4 for native fetch (used by myanimelist-wrapper)
-  setGlobalDispatcher(new Agent({ connect: { family: 4 } }));
+  setGlobalDispatcher(new Agent({ connect: { family: 4 } as any }));
   dns.setDefaultResultOrder('ipv4first');
 
   const app = await NestFactory.create(AppModule);
   app.useGlobalPipes(new ValidationPipe({ transform: true }));
   app.useGlobalFilters(new HttpExceptionFilter());
-   app.enableCors({
+  app.enableCors({
     origin: [
       'https://filmstreamer.org',
       'https://www.filmstreamer.org',
       'http://localhost:3000',
+      'http://localhost:3001',
       'http://127.0.0.1:3000',
       'http://10.251.187.114:3000'
     ],
@@ -29,7 +30,7 @@ async function bootstrap() {
   app.setGlobalPrefix('api/v1');
 
 
-  
+
 
   // Swagger Setup
   const config = new DocumentBuilder()

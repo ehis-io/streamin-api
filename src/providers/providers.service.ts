@@ -102,6 +102,41 @@ export class ProvidersService {
 
     this.logger.log(`Resolving streams for ${title} (${activeMediaType}) - S${season} E${episode} [Priority: ${priority}]`);
 
+    const dbSeason = (activeMediaType === 'tv' || activeMediaType === 'anime') ? (season || 1) : null;
+    const dbEpisode = (activeMediaType === 'tv' || activeMediaType === 'anime') ? (episode || 1) : null;
+
+    // Check DB for existing stream links
+    try {
+      const existingLinks = await (this.prisma as any).streamedLink.findMany({
+        where: {
+          ...(activeMediaType === 'anime' ? { malId } : { tmdbId }),
+          season: dbSeason,
+          episode: dbEpisode,
+          type
+        },
+      });
+
+      if (existingLinks && existingLinks.length > 0) {
+        this.logger.log(`Found ${existingLinks.length} cached links for ${title} in the database`);
+        
+        const cachedStreamLinks: (StreamLink & { provider: string })[] = existingLinks.map(link => ({
+          url: link.url,
+          quality: link.quality as any,
+          isM3U8: link.isM3U8,
+          headers: link.headers ? JSON.parse(link.headers) : undefined,
+          provider: link.provider,
+        }));
+        
+        if (onLinkFound) {
+          cachedStreamLinks.forEach(link => onLinkFound(link));
+        }
+        
+        return cachedStreamLinks;
+      }
+    } catch (dbError) {
+      this.logger.warn(`Error checking database for existing links: ${dbError.message}`);
+    }
+
     const allLinks: StreamLink[] = [];
     const activeScrapers = this.scrapers.filter(s =>
       !s.supportedTypes || s.supportedTypes.includes(activeMediaType!)
@@ -208,6 +243,26 @@ export class ProvidersService {
             try {
               const isValid = await this.validateStream(link.url, priority);
               if (isValid) {
+                // Save to Database
+                try {
+                  await (this.prisma as any).streamedLink.create({
+                    data: {
+                      tmdbId: activeMediaType === 'anime' ? null : tmdbId,
+                      malId: activeMediaType === 'anime' ? malId : null,
+                      season: dbSeason,
+                      episode: dbEpisode,
+                      url: link.url,
+                      quality: link.quality || 'auto',
+                      isM3U8: link.isM3U8 || false,
+                      provider: link.provider,
+                      headers: link.headers ? JSON.stringify(link.headers) : null,
+                      type: type,
+                    }
+                  });
+                } catch (saveError) {
+                  this.logger.warn(`Failed to save stream link to DB: ${saveError.message}`);
+                }
+
                 if (onLinkFound) onLinkFound(link);
                 return link;
               }
