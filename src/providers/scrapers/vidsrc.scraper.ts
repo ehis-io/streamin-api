@@ -38,7 +38,7 @@ export class VidSrcScraper implements Scraper {
 
     return this.baseUrls.flatMap(baseUrl => {
       const results: ScraperSearchResult[] = [];
-      
+
       if (!mediaType || activeType === 'movie') {
         results.push({
           title: `${query} (${new URL(baseUrl).hostname})`,
@@ -46,7 +46,7 @@ export class VidSrcScraper implements Scraper {
           poster: ''
         });
       }
-      
+
       if (!mediaType || activeType === 'tv') {
         results.push({
           title: `${query} (TV) (${new URL(baseUrl).hostname})`,
@@ -69,7 +69,7 @@ export class VidSrcScraper implements Scraper {
         if (embedUrl.includes('/movie?')) {
           embedUrl = embedUrl.replace('/movie?', '/tv?');
         }
-        
+
         try {
           const urlObj = new URL(embedUrl);
           const season = episode.season || 1;
@@ -85,7 +85,7 @@ export class VidSrcScraper implements Scraper {
       }
 
       this.logger.debug(`Navigating to embed URL: ${embedUrl}`);
-      
+
       return new Promise<StreamLink[]>(async (resolve) => {
         const m3u8Links: StreamLink[] = [];
         let isResolved = false;
@@ -118,27 +118,29 @@ export class VidSrcScraper implements Scraper {
 
         // Navigate with a shorter timeout
         try {
-          await page.goto(embedUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
-          
-          // Wait a maximum of 5 more seconds for dynamic links if none found yet
-          if (m3u8Links.length === 0) {
-            await new Promise(r => setTimeout(r, 5000));
+          await page.goto(embedUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
+
+          // Wait a maximum of 3 more seconds for dynamic links if none found yet
+          if (!isResolved && m3u8Links.length === 0) {
+            await new Promise(r => setTimeout(r, 3000));
           }
         } catch (e) {
           this.logger.warn(`Navigation to ${embedUrl} timed out, checking extracted links...`);
         }
 
-        if (m3u8Links.length > 0) {
-          resolveLinks(m3u8Links);
-        } else {
-          // Fallback to embed URL
-          this.logger.warn(`No M3U8 links for VidSrc, falling back`);
-          resolveLinks([{
-            url: embedUrl,
-            quality: 'Auto',
-            isM3U8: false,
-            headers: { 'Referer': 'https://vidsrc.to/' }
-          }]);
+        if (!isResolved) {
+          if (m3u8Links.length > 0) {
+            resolveLinks(m3u8Links);
+          } else {
+            // Fallback to embed URL
+            this.logger.warn(`No M3U8 links for VidSrc, falling back`);
+            resolveLinks([{
+              url: embedUrl,
+              quality: 'Auto',
+              isM3U8: false,
+              headers: { 'Referer': 'https://vidsrc.to/' }
+            }]);
+          }
         }
       });
     }, priority).catch(error => {

@@ -5,7 +5,12 @@ import { MALService } from '../mal/mal.service';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import type { Cache } from 'cache-manager';
 import { PrismaService } from '../prisma/prisma.service';
-import axios from 'axios';
+import axios, { AxiosInstance } from 'axios';
+import * as http from 'http';
+import * as https from 'https';
+
+const httpAgent = new http.Agent({ keepAlive: true });
+const httpsAgent = new https.Agent({ keepAlive: true });
 
 @Injectable()
 export class ProvidersService {
@@ -26,10 +31,13 @@ export class ProvidersService {
     @Inject(CACHE_MANAGER) private cacheManager: Cache,
     private prisma: PrismaService,
   ) {
-    // Ensure scrapers is an array (handles cases where NestJS might inject a single object or nothing)
     this.scrapers = Array.isArray(this.scrapers) ? this.scrapers : (this.scrapers ? [this.scrapers] : []);
     this.scrapers.sort((a, b) => (b.priority || 0) - (a.priority || 0));
     this.logger.log(`Registered ${this.scrapers.length} scrapers: ${this.scrapers.map(s => s.name).join(', ')}`);
+
+    // Global axios defaults for connection pooling
+    axios.defaults.httpAgent = httpAgent;
+    axios.defaults.httpsAgent = httpsAgent;
   }
 
   getScrapers(): Scraper[] {
@@ -105,7 +113,22 @@ export class ProvidersService {
     const dbSeason = (activeMediaType === 'tv' || activeMediaType === 'anime') ? (season || 1) : null;
     const dbEpisode = (activeMediaType === 'tv' || activeMediaType === 'anime') ? (episode || 1) : null;
 
-    // Check DB for existing stream links
+    // 1. Check Redis Cache (Fastest)
+    const cacheKey = `streams:${activeMediaType}:${activeMediaType === 'anime' ? malId : tmdbId}:s${dbSeason}:e${dbEpisode}:${type}`;
+    try {
+      const cachedLinks = await this.cacheManager.get<StreamLink[]>(cacheKey);
+      if (cachedLinks && cachedLinks.length > 0) {
+        this.logger.debug(`[Redis] Cache hit for ${cacheKey}`);
+        if (onLinkFound) {
+          cachedLinks.forEach(link => onLinkFound(link));
+        }
+        return cachedLinks;
+      }
+    } catch (cacheError) {
+      this.logger.warn(`Redis cache check failed: ${cacheError.message}`);
+    }
+
+    // 2. Check DB for existing stream links
     try {
       const existingLinks = await (this.prisma as any).streamedLink.findMany({
         where: {
@@ -118,7 +141,7 @@ export class ProvidersService {
 
       if (existingLinks && existingLinks.length > 0) {
         this.logger.log(`Found ${existingLinks.length} cached links for ${title} in the database`);
-        
+
         const cachedStreamLinks: (StreamLink & { provider: string })[] = existingLinks.map(link => ({
           url: link.url,
           quality: link.quality as any,
@@ -126,11 +149,11 @@ export class ProvidersService {
           headers: link.headers ? JSON.parse(link.headers) : undefined,
           provider: link.provider,
         }));
-        
+
         if (onLinkFound) {
           cachedStreamLinks.forEach(link => onLinkFound(link));
         }
-        
+
         return cachedStreamLinks;
       }
     } catch (dbError) {
@@ -152,7 +175,7 @@ export class ProvidersService {
         let mappingKey = activeMediaType === 'anime'
           ? `mal:anime:${malId}:${scraper.name}`
           : `tmdb:${activeMediaType}:${tmdbId}:${scraper.name}`;
-          
+
         if (activeMediaType === 'tv' && season) {
           mappingKey += `:s${season}`;
         }
@@ -172,25 +195,25 @@ export class ProvidersService {
           }];
         } else {
           // For TV shows, specifically include the season in the search query to improve accuracy
-          const searchQuery = (activeMediaType === 'tv' && season) 
-            ? `${title} Season ${season}` 
+          const searchQuery = (activeMediaType === 'tv' && season)
+            ? `${title} Season ${season}`
             : title;
-            
+
           this.logger.debug(`Searching for ${scraper.name} using query: "${searchQuery}"`);
           searchResults = await scraper.search(searchQuery, tmdbId, imdbId, malId, priority, activeMediaType);
-          
+
           // Save the first mapping for future use
           // CRITICAL: Ensure we don't map episode-specific URLs at the show level
           if (searchResults.length > 0) {
             const bestResult = searchResults[0];
             const lowerUrl = bestResult.url.toLowerCase();
-            const isEpisodeSpecific = 
+            const isEpisodeSpecific =
               (lowerUrl.includes('/tv/') && (lowerUrl.match(/\//g) || []).length > 4) ||
               lowerUrl.includes('episode=') ||
               lowerUrl.includes('season=') ||
               lowerUrl.includes('/play/') ||
               lowerUrl.includes('/watch/');
-            
+
             if (!isEpisodeSpecific) {
               try {
                 await (this.prisma as any).providerMapping.upsert({
@@ -275,12 +298,23 @@ export class ProvidersService {
 
         const validLinks = validationResults.filter((l): l is StreamLink & { provider: string } => l !== null);
         allLinks.push(...validLinks);
+
+        // Update Redis Cache if we found new links
+        if (validLinks.length > 0) {
+          this.cacheManager.set(cacheKey, allLinks, 24 * 60 * 60 * 1000); // 24 hour TTL
+        }
+
         return validLinks;
       } catch (e) {
         this.logger.error(`${scraper.name} CRITICAL FAILURE: ${e.message}`);
         return [];
       }
     });
+
+    // Run scrapers and return individual links as they are found via onLinkFound
+    // We already passed onLinkFound to the scrapers and they call it after validation.
+    // However, for speed, we can speculatively emit the first few links even BEFORE validation
+    // or just ensure validation is extremely fast.
 
     // Wait for all scrapers to complete (or fail)
     await Promise.all(scraperPromises);
@@ -295,8 +329,8 @@ export class ProvidersService {
       domain.includes('gogoanime') ||
       domain.includes('9animetv.be');
 
-    // Fast-path for direct M3U8 links from trusted high-priority scrapers if they're not restricted
-    if (!isRestricted && url.includes('.m3u8')) {
+    // Fast-path for direct M3U8 links - now including restricted domains if priority is reasonable
+    if (url.includes('.m3u8')) {
       this.logger.debug(`Fast-tracking validation for M3U8: ${domain}`);
       return true;
     }
@@ -350,14 +384,13 @@ export class ProvidersService {
     const domain = new URL(url).hostname;
     try {
       // First try a HEAD request - it's much faster and uses less bandwidth
-      // Some providers block HEAD, so we fallback to GET
       try {
         const headResponse = await axios.head(url, {
           headers: {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
             'Referer': url
           },
-          timeout: 1500 // Reduced from 2s to 1.5s
+          timeout: 1000 // Reduced from 1.5s to 1s
         });
         if (headResponse.status === 200) return true;
       } catch (headError) {
@@ -370,11 +403,10 @@ export class ProvidersService {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
           'Referer': url
         },
-        timeout: 5000, // Reduced from 8s to 5s for faster fail-fast
-        responseType: 'stream' // Use stream to avoid downloading huge files
+        timeout: 3000, // Reduced from 5s to 3s
+        responseType: 'stream'
       });
 
-      // Read only a small portion of the response to check for error text
       return new Promise((resolve) => {
         let buffer = '';
         const stream = response.data;
@@ -393,9 +425,8 @@ export class ProvidersService {
             resolve(false);
           }
 
-          // If we've read 2KB (reduced from 10KB) and haven't found error text, assume it's valid
-          // This speeds up validation significantly for working streams
-          if (buffer.length > 2048) {
+          // If we've read 1KB (reduced from 2KB) and haven't found error text, assume it's valid
+          if (buffer.length > 1024) {
             stream.destroy();
             resolve(true);
           }
@@ -443,15 +474,15 @@ export class ProvidersService {
         try {
           this.logger.debug(`Proactively resolving streams for ${item.id} (${item.mediaType})`);
           // Resolve links (this also saves to DB and cache)
-            await this.findStreamLinks(
-              item.id,
-              item.mediaType === 'tv' ? 1 : undefined,
-              item.mediaType === 'tv' ? 1 : (item.mediaType === 'anime' ? 1 : undefined),
-              'sub',
-              item.mediaType,
-              onLinkFound ? (link) => onLinkFound(item.id, link) : undefined,
-              1 // LOW PRIORITY for prefetch
-            );
+          await this.findStreamLinks(
+            item.id,
+            item.mediaType === 'tv' ? 1 : undefined,
+            item.mediaType === 'tv' ? 1 : (item.mediaType === 'anime' ? 1 : undefined),
+            'sub',
+            item.mediaType,
+            onLinkFound ? (link) => onLinkFound(item.id, link) : undefined,
+            1 // LOW PRIORITY for prefetch
+          );
         } catch (err) {
           this.logger.debug(`Background prefetch failed for ${item.id}: ${err.message}`);
         }

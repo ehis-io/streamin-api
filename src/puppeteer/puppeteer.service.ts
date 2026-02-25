@@ -7,9 +7,10 @@ import { Browser, Page } from 'puppeteer';
 export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PuppeteerService.name);
   private browser: Browser | null = null;
-  private readonly maxPages = 5; // Increased for better performance
+  private readonly maxPages = 5;
   private activePages = 0;
-  private queue: { priority: number; resolve: () => void }[] = [];
+  private readonly pagePool: { page: Page; context: any }[] = [];
+  private queue: { priority: number; resolve: (val: { page: Page; context: any }) => void }[] = [];
 
   constructor() {
     puppeteer.use(StealthPlugin());
@@ -17,6 +18,12 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleInit() {
     await this.ensureBrowser();
+    // Pre-warm the pool with a couple of pages
+    this.logger.log('Pre-warming Puppeteer page pool...');
+    for (let i = 0; i < 2; i++) {
+      const warmed = await this.createNewPage();
+      if (warmed) this.pagePool.push(warmed);
+    }
   }
 
   async onModuleDestroy() {
@@ -34,6 +41,7 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
       } catch (e) {
         this.logger.warn('Browser instance is disconnected or crashed, restarting...');
         this.browser = null;
+        this.pagePool.length = 0; // Clear stale pool
       }
     }
 
@@ -58,92 +66,121 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  async withPage<T>(fn: (page: Page) => Promise<T>, priority: number = 0): Promise<T> {
-    if (this.activePages >= this.maxPages) {
-      this.logger.debug(`Max pages reached (${this.maxPages}). Queuing request with priority ${priority}...`);
-      await new Promise<void>((resolve) => {
-        this.queue.push({ priority, resolve });
-        // Sort queue: lower priority number = higher priority
-        this.queue.sort((a, b) => a.priority - b.priority);
-      });
-    }
-
-    this.activePages++;
-    await this.ensureBrowser();
-
-    let context: any = null;
-    let page: Page | null = null;
+  private async createNewPage(): Promise<{ page: Page; context: any } | null> {
     try {
-      // Create a new isolated browser context (incognito) for every request
-      context = await this.browser!.createBrowserContext();
-      page = await context.newPage();
+      await this.ensureBrowser();
+      const context = await this.browser!.createBrowserContext();
+      const page = await context.newPage();
 
-      if (!page) {
-        throw new Error('Failed to create a new page');
-      }
-      
-      // Speed Optimization: Block unnecessary resources and ads/tracking
       await page.setRequestInterception(true);
-      
       const blockedResources = ['image', 'stylesheet', 'font', 'media', 'other'];
       const blockedDomains = [
-        'google-analytics.com',
-        'googletagmanager.com',
-        'doubleclick.net',
-        'onesignal.com',
-        'adsbygoogle',
-        'crashlytics.com',
-        'facebook.net',
-        'cloudfront.net',
-        'hotjar.com',
-        'sentry.io',
-        'mixpanel.com'
+        'google-analytics.com', 'googletagmanager.com', 'doubleclick.net',
+        'onesignal.com', 'adsbygoogle', 'crashlytics.com', 'facebook.net',
+        'cloudfront.net', 'hotjar.com', 'sentry.io', 'mixpanel.com'
       ];
 
       page.on('request', (request) => {
         const url = request.url().toLowerCase();
         const resourceType = request.resourceType();
-
-        // ALWAYS allow M3U8 discovery
         if (url.includes('.m3u8')) {
           request.continue();
           return;
         }
-
-        if (
-          blockedResources.includes(resourceType) ||
-          blockedDomains.some(domain => url.includes(domain))
-        ) {
+        if (blockedResources.includes(resourceType) || blockedDomains.some(domain => url.includes(domain))) {
           request.abort();
         } else {
           request.continue();
         }
       });
 
-      // Set reasonable default timeouts
       page.setDefaultNavigationTimeout(30000);
       page.setDefaultTimeout(30000);
-      
-      return await fn(page);
+
+      return { page, context };
+    } catch (e) {
+      this.logger.error(`Failed to create new page: ${e.message}`);
+      return null;
+    }
+  }
+
+  async withPage<T>(fn: (page: Page) => Promise<T>, priority: number = 0): Promise<T> {
+    let pageObj: { page: Page; context: any } | null = null;
+
+    if (this.pagePool.length > 0) {
+      pageObj = this.pagePool.shift()!;
+      this.activePages++;
+    } else if (this.activePages < this.maxPages) {
+      this.activePages++;
+      pageObj = await this.createNewPage();
+    }
+
+    if (!pageObj) {
+      this.logger.debug(`No pages available. Queuing request with priority ${priority}...`);
+      pageObj = await new Promise<{ page: Page; context: any }>((resolve) => {
+        this.queue.push({ priority, resolve });
+        this.queue.sort((a, b) => a.priority - b.priority);
+      });
+      this.activePages++;
+    }
+
+    try {
+      return await fn(pageObj.page);
     } catch (error) {
       this.logger.error(`Error during Puppeteer task: ${error.message}`);
       throw error;
     } finally {
-      if (page) {
-        await (page as any).close().catch((e: any) => this.logger.warn(`Failed to close page: ${e.message}`));
+      // Reset the page instead of closing it
+      try {
+        const { page } = pageObj;
+        // Clean up listeners from the previous task
+        page.removeAllListeners('request');
+        // RE-ATTACH the blocking listener
+        page.on('request', (request) => {
+          const url = request.url().toLowerCase();
+          const resourceType = request.resourceType();
+          if (url.includes('.m3u8')) { request.continue(); return; }
+          if (['image', 'stylesheet', 'font', 'media', 'other'].includes(resourceType)) {
+            request.abort();
+          } else {
+            request.continue();
+          }
+        });
+
+        await page.goto('about:blank');
+        const client = await (page as any).target().createCDPSession();
+        await client.send('Network.clearBrowserCookies');
+        await client.send('Network.clearBrowserCache');
+
+        this.pagePool.push(pageObj);
+      } catch (resetError) {
+        this.logger.warn(`Failed to reset page, closing it instead: ${resetError.message}`);
+        await pageObj.context.close().catch(() => { });
       }
-      if (context) {
-        await (context as any).close().catch((e: any) => this.logger.warn(`Failed to close browser context: ${e.message}`));
-      }
+
       this.activePages--;
       this.processQueue();
     }
   }
 
   private processQueue() {
-    if (this.queue.length > 0 && this.activePages < this.maxPages) {
+    if (this.queue.length > 0 && (this.pagePool.length > 0 || this.activePages < this.maxPages)) {
       const { resolve } = this.queue.shift()!;
-      resolve();
+
+      let pageObj: { page: Page; context: any } | null = null;
+      if (this.pagePool.length > 0) {
+        pageObj = this.pagePool.shift()!;
+      }
+
+      if (pageObj) {
+        resolve(pageObj);
+      } else {
+        // If no pooled page but we have capacity, it will be handled by the next tick of withPage's queue processing
+        // Actually, we should create it here if we have capacity
+        this.createNewPage().then(p => {
+          if (p) resolve(p);
+        });
+      }
     }
   }
 }
