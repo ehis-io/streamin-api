@@ -5,13 +5,11 @@ import { PuppeteerService } from '../../puppeteer/puppeteer.service';
 @Injectable()
 export class VidSrcScraper implements Scraper {
   name = 'VidSrc';
-  priority = 20;
+  priority = 100;
   private readonly logger = new Logger(VidSrcScraper.name);
   private readonly baseUrls = [
     'https://vidsrc-embed.ru',
-    'https://vidsrc-embed.su',
-    'https://vidsrcme.su',
-    'https://vsrc.su'
+    'https://vidsrc-embed.su'
   ];
 
   constructor(private puppeteerService: PuppeteerService) { }

@@ -19,7 +19,7 @@ export class ProvidersService {
   private readonly validationQueues = new Map<string, (() => Promise<void>)[]>();
   private readonly activeValidations = new Map<string, number>();
   private readonly coolingDownDomains = new Map<string, number>();
-  private readonly MAX_CONCURRENT_PER_DOMAIN = 3;
+  private readonly MAX_CONCURRENT_PER_DOMAIN = 5;
   private readonly RETRY_DELAY_MS = 5000;
   private readonly COOL_DOWN_MS = 30000;
   private readonly MAX_RETRIES = 3;
@@ -129,13 +129,19 @@ export class ProvidersService {
     }
 
     // 2. Check DB for existing stream links
+    const volatileThreshold = new Date(Date.now() - 4 * 60 * 60 * 1000); // 4 hours for direct streams
+    const stableThreshold = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000); // 30 days for embeds
     try {
       const existingLinks = await (this.prisma as any).streamedLink.findMany({
         where: {
           ...(activeMediaType === 'anime' ? { malId } : { tmdbId }),
           season: dbSeason,
           episode: dbEpisode,
-          type
+          type,
+          OR: [
+            { isM3U8: true, createdAt: { gte: volatileThreshold } },
+            { isM3U8: false, createdAt: { gte: stableThreshold } }
+          ]
         },
       });
 
@@ -301,7 +307,7 @@ export class ProvidersService {
 
         // Update Redis Cache if we found new links
         if (validLinks.length > 0) {
-          this.cacheManager.set(cacheKey, allLinks, 24 * 60 * 60 * 1000); // 24 hour TTL
+          this.cacheManager.set(cacheKey, allLinks, 4 * 60 * 60 * 1000); // Reduce TTL to 4 hours to match DB staleness
         }
 
         return validLinks;
@@ -313,11 +319,31 @@ export class ProvidersService {
 
     // Run scrapers and return individual links as they are found via onLinkFound
     // We already passed onLinkFound to the scrapers and they call it after validation.
-    // However, for speed, we can speculatively emit the first few links even BEFORE validation
-    // or just ensure validation is extremely fast.
 
-    // Wait for all scrapers to complete (or fail)
-    await Promise.all(scraperPromises);
+    // SPECULATIVE COMPLETION: We don't necessarily need to wait for ALL scrapers 
+    // if we already found high-quality validated links.
+    const startTime = Date.now();
+    const timeout = 25000; // 25s total limit
+
+    await Promise.race([
+      Promise.all(scraperPromises),
+      new Promise(async (resolve) => {
+        // Poll for results every second
+        const interval = setInterval(() => {
+          const m3u8Count = allLinks.filter(l => l.isM3U8).length;
+          // If we have at least 3 validated M3U8 links OR 15s has passed with at least 1, we're likely good
+          if (m3u8Count >= 3 || (Date.now() - startTime > 15000 && m3u8Count >= 1)) {
+            this.logger.debug(`Speculative completion triggered with ${allLinks.length} links (${m3u8Count} M3U8)`);
+            clearInterval(interval);
+            resolve(true);
+          }
+          if (Date.now() - startTime > timeout) {
+            clearInterval(interval);
+            resolve(true);
+          }
+        }, 1000);
+      })
+    ]);
 
     return allLinks;
   }
@@ -329,11 +355,8 @@ export class ProvidersService {
       domain.includes('gogoanime') ||
       domain.includes('9animetv.be');
 
-    // Fast-path for direct M3U8 links - now including restricted domains if priority is reasonable
-    if (url.includes('.m3u8')) {
-      this.logger.debug(`Fast-tracking validation for M3U8: ${domain}`);
-      return true;
-    }
+    // We no longer fast-path M3U8 links because they can be dead/expired.
+    // Instead, we always perform at least a HEAD request to verify.
 
     if (!isRestricted) {
       return this.executeValidation(url);

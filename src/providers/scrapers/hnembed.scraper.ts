@@ -5,11 +5,10 @@ import { PuppeteerService } from '../../puppeteer/puppeteer.service';
 @Injectable()
 export class HnEmbedScraper implements Scraper {
   name = 'HnEmbed';
-  priority = 15;
+  priority = 10;
   private readonly logger = new Logger(HnEmbedScraper.name);
   private readonly baseUrls = [
-    'https://hnembed.cc',
-    'https://hnembed.net'
+    'https://hnembed.cc'
   ];
 
   constructor(private puppeteerService: PuppeteerService) { }
@@ -23,10 +22,10 @@ export class HnEmbedScraper implements Scraper {
 
     const id = imdbId || tmdbId?.toString();
     const activeType = mediaType === 'tv' ? 'tv' : 'movie';
-    
+
     return this.baseUrls.flatMap(baseUrl => {
       const results: ScraperSearchResult[] = [];
-      
+
       if (!mediaType || activeType === 'movie') {
         results.push({
           title: `${query} (${new URL(baseUrl).hostname})`,
@@ -34,7 +33,7 @@ export class HnEmbedScraper implements Scraper {
           poster: ''
         });
       }
-      
+
       if (!mediaType || activeType === 'tv') {
         results.push({
           title: `${query} (TV) (${new URL(baseUrl).hostname})`,
@@ -56,22 +55,22 @@ export class HnEmbedScraper implements Scraper {
       if (episode && (episode.season || episode.episode)) {
         const season = episode.season || 1;
         const ep = episode.episode || 1;
-        
+
         if (embedUrl.includes('/movie/')) {
           embedUrl = embedUrl.replace('/movie/', '/tv/') + `/${season}/${ep}`;
         } else if (embedUrl.includes('/tv/')) {
-           const parts = embedUrl.split('/');
-           const tvIndex = parts.indexOf('tv');
-           if (tvIndex !== -1 && parts.length > tvIndex + 1) {
-             embedUrl = parts.slice(0, tvIndex + 2).join('/') + `/${season}/${ep}`;
-           }
+          const parts = embedUrl.split('/');
+          const tvIndex = parts.indexOf('tv');
+          if (tvIndex !== -1 && parts.length > tvIndex + 1) {
+            embedUrl = parts.slice(0, tvIndex + 2).join('/') + `/${season}/${ep}`;
+          }
         } else {
           embedUrl = `${embedUrl.replace(/\/$/, '')}/tv/${season}/${ep}`;
         }
       }
 
       this.logger.debug(`Navigating to HnEmbed URL: ${embedUrl}`);
-      
+
       return new Promise<StreamLink[]>(async (resolve) => {
         const m3u8Links: StreamLink[] = [];
         let isResolved = false;
@@ -91,7 +90,7 @@ export class HnEmbedScraper implements Scraper {
           const reqUrl = request.url();
           if (reqUrl.includes('.m3u8') && !reqUrl.includes('heartbeat')) {
             this.logger.debug(`Found HnEmbed M3U8 link: ${reqUrl}`);
-            
+
             const streamLink = {
               url: reqUrl,
               quality: 'Auto',
@@ -120,7 +119,7 @@ export class HnEmbedScraper implements Scraper {
         try {
           // Use 'domcontentloaded' for faster navigation as we only care about requests
           await page.goto(embedUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
-          
+
           // Wait a maximum of 3 more seconds if no links found yet
           if (m3u8Links.length === 0) {
             await new Promise(r => setTimeout(r, 3000));

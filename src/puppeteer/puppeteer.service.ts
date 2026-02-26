@@ -7,7 +7,7 @@ import { Browser, Page } from 'puppeteer';
 export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PuppeteerService.name);
   private browser: Browser | null = null;
-  private readonly maxPages = 5;
+  private readonly maxPages = 10;
   private activePages = 0;
   private readonly pagePool: { page: Page; context: any }[] = [];
   private queue: { priority: number; resolve: (val: { page: Page; context: any }) => void }[] = [];
@@ -57,6 +57,9 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
           '--no-first-run',
           '--disable-extensions',
           '--disable-component-update',
+          '--disable-features=Translate,OptimizationHints,MediaRouter,DefaultBrowserFreeOfferPrompt',
+          '--blink-settings=imagesEnabled=false',
+          '--js-flags="--max-old-space-size=256"'
         ],
       }) as Browser;
       this.logger.log('Puppeteer browser launched successfully');
@@ -73,11 +76,12 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
       const page = await context.newPage();
 
       await page.setRequestInterception(true);
-      const blockedResources = ['image', 'stylesheet', 'font', 'media', 'other'];
+      const blockedResources = ['image', 'stylesheet', 'font', 'media', 'other', 'manifest', 'texttrack', 'eventsource', 'websocket'];
       const blockedDomains = [
         'google-analytics.com', 'googletagmanager.com', 'doubleclick.net',
         'onesignal.com', 'adsbygoogle', 'crashlytics.com', 'facebook.net',
-        'cloudfront.net', 'hotjar.com', 'sentry.io', 'mixpanel.com'
+        'cloudfront.net', 'hotjar.com', 'sentry.io', 'mixpanel.com',
+        'amazon-adsystem.com', 'adnxs.com', 'pubmatic.com', 'rubiconproject.com'
       ];
 
       page.on('request', (request) => {
