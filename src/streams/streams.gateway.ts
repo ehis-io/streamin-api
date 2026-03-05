@@ -13,7 +13,7 @@ import { Logger } from '@nestjs/common';
 
 @WebSocketGateway({
     cors: {
-        origin: ['https://filmstreamer.org', 'http://localhost:3000'],
+        origin: true,
         credentials: true,
     },
 })
