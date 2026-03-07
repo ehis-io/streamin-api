@@ -16,13 +16,17 @@ const httpsAgent = new https.Agent({ keepAlive: true });
 export class ProvidersService {
   private readonly logger = new Logger(ProvidersService.name);
 
+  private readonly MAX_RETRIES = 3;
+  
   private readonly validationQueues = new Map<string, (() => Promise<void>)[]>();
   private readonly activeValidations = new Map<string, number>();
   private readonly coolingDownDomains = new Map<string, number>();
   private readonly MAX_CONCURRENT_PER_DOMAIN = 5;
   private readonly RETRY_DELAY_MS = 5000;
   private readonly COOL_DOWN_MS = 30000;
-  private readonly MAX_RETRIES = 3;
+
+  private readonly inFlightRequests = new Map<string, Promise<StreamLink[]>>();
+  private readonly activePrefetches = new Set<string>();
 
   constructor(
     @Inject(SCRAPER_TOKEN) private scrapers: Scraper[],
@@ -96,7 +100,6 @@ export class ProvidersService {
         } catch (searchError) {
           this.logger.warn(`TMDB search failed for Anime mapping: ${searchError.message}`);
         }
-
       } else {
         tmdbId = numericId;
         details = await this.tmdbService.getDetails(tmdbId, activeMediaType as 'movie' | 'tv');
@@ -108,10 +111,52 @@ export class ProvidersService {
       return [];
     }
 
-    this.logger.log(`Resolving streams for ${title} (${activeMediaType}) - S${season} E${episode} [Priority: ${priority}]`);
-
     const dbSeason = (activeMediaType === 'tv' || activeMediaType === 'anime') ? (season || 1) : null;
     const dbEpisode = (activeMediaType === 'tv' || activeMediaType === 'anime') ? (episode || 1) : null;
+
+    const requestKey = `${activeMediaType}:${activeMediaType === 'anime' ? malId : tmdbId}:s${dbSeason}:e${dbEpisode}:${type}`;
+
+    // 0. Check for in-flight requests (Deduplication)
+    if (this.inFlightRequests.has(requestKey)) {
+      this.logger.debug(`[Deduplication] Joining in-flight request for ${requestKey}`);
+      const inFlight = await this.inFlightRequests.get(requestKey)!;
+      if (onLinkFound) {
+        inFlight.forEach(link => onLinkFound(link));
+      }
+      return inFlight;
+    }
+
+    const fetchPromise = (async () => {
+      try {
+        return await this.performFindStreamLinks(
+          id, numericId, title, tmdbId, malId, imdbId, activeMediaType,
+          dbSeason, dbEpisode, type, onLinkFound, priority
+        );
+      } finally {
+        this.inFlightRequests.delete(requestKey);
+      }
+    })();
+
+    this.inFlightRequests.set(requestKey, fetchPromise);
+    return fetchPromise;
+  }
+
+  private async performFindStreamLinks(
+    id: string,
+    numericId: number,
+    title: string,
+    tmdbId: number | undefined,
+    malId: number | undefined,
+    imdbId: string | undefined,
+    activeMediaType: string | undefined,
+    dbSeason: number | null,
+    dbEpisode: number | null,
+    type: 'sub' | 'dub',
+    onLinkFound?: (link: StreamLink) => void,
+    priority: number = 0
+  ): Promise<StreamLink[]> {
+    const season = dbSeason;
+    const episode = dbEpisode;
 
     // 1. Check Redis Cache (Fastest)
     const cacheKey = `streams:${activeMediaType}:${activeMediaType === 'anime' ? malId : tmdbId}:s${dbSeason}:e${dbEpisode}:${type}`;
@@ -165,6 +210,8 @@ export class ProvidersService {
     } catch (dbError) {
       this.logger.warn(`Error checking database for existing links: ${dbError.message}`);
     }
+
+    this.logger.log(`Resolving streams for ${title} (${activeMediaType}) - S${dbSeason} E${dbEpisode} [Priority: ${priority}]`);
 
     const allLinks: StreamLink[] = [];
     const activeScrapers = this.scrapers.filter(s =>
@@ -494,13 +541,23 @@ export class ProvidersService {
         const item = queue.shift();
         if (!item) break;
 
+        const dbSeason = item.mediaType === 'tv' ? 1 : null;
+        const dbEpisode = item.mediaType === 'tv' ? 1 : (item.mediaType === 'anime' ? 1 : null);
+        const prefetchKey = `${item.mediaType}:${item.id}:s${dbSeason}:e${dbEpisode}`;
+
+        if (this.activePrefetches.has(prefetchKey)) {
+          this.logger.debug(`[Prefetch Guard] Skip: ${prefetchKey} already in progress`);
+          continue;
+        }
+
         try {
+          this.activePrefetches.add(prefetchKey);
           this.logger.debug(`Proactively resolving streams for ${item.id} (${item.mediaType})`);
           // Resolve links (this also saves to DB and cache)
           await this.findStreamLinks(
             item.id,
-            item.mediaType === 'tv' ? 1 : undefined,
-            item.mediaType === 'tv' ? 1 : (item.mediaType === 'anime' ? 1 : undefined),
+            dbSeason || undefined,
+            dbEpisode || undefined,
             'sub',
             item.mediaType,
             onLinkFound ? (link) => onLinkFound(item.id, link) : undefined,
@@ -508,6 +565,8 @@ export class ProvidersService {
           );
         } catch (err) {
           this.logger.debug(`Background prefetch failed for ${item.id}: ${err.message}`);
+        } finally {
+          this.activePrefetches.delete(prefetchKey);
         }
 
         // Small delay between items to be nice to providers
