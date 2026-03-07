@@ -129,8 +129,8 @@ export class ProvidersService {
     }
 
     // 2. Check DB for existing stream links
-    const volatileThreshold = new Date(Date.now() - 4 * 60 * 60 * 1000); // 4 hours for direct streams
-    const stableThreshold = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000); // 30 days for embeds
+    const volatileThreshold = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000); // 7 days for direct streams
+    const stableThreshold = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000); // 1 year for embeds
     try {
       const existingLinks = await (this.prisma as any).streamedLink.findMany({
         where: {
@@ -307,7 +307,7 @@ export class ProvidersService {
 
         // Update Redis Cache if we found new links
         if (validLinks.length > 0) {
-          this.cacheManager.set(cacheKey, allLinks, 4 * 60 * 60 * 1000); // Reduce TTL to 4 hours to match DB staleness
+          this.cacheManager.set(cacheKey, allLinks, 24 * 60 * 60 * 1000); // 24 hours TTL for Redis
         }
 
         return validLinks;
@@ -426,7 +426,7 @@ export class ProvidersService {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
           'Referer': url
         },
-        timeout: 3000, // Reduced from 5s to 3s
+        timeout: 2000, // Reduced from 3s to 2s
         responseType: 'stream'
       });
 
@@ -448,8 +448,8 @@ export class ProvidersService {
             resolve(false);
           }
 
-          // If we've read 1KB (reduced from 2KB) and haven't found error text, assume it's valid
-          if (buffer.length > 1024) {
+          // If we've read 512B (reduced from 1KB) and haven't found error text, assume it's valid
+          if (buffer.length > 512) {
             stream.destroy();
             resolve(true);
           }
