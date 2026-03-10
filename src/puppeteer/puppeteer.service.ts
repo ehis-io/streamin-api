@@ -1,4 +1,5 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import { Browser, Page } from 'puppeteer';
@@ -7,13 +8,14 @@ import { Browser, Page } from 'puppeteer';
 export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PuppeteerService.name);
   private browser: Browser | null = null;
-  private readonly maxPages = 10;
+  private readonly maxPages: number;
   private activePages = 0;
   private readonly pagePool: { page: Page; context: any }[] = [];
   private queue: { priority: number; resolve: (val: { page: Page; context: any }) => void }[] = [];
 
-  constructor() {
+  constructor(private configService: ConfigService) {
     puppeteer.use(StealthPlugin());
+    this.maxPages = this.configService.get<number>('PUPPETEER_MAX_PAGES', 10);
   }
 
   async onModuleInit() {

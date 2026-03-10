@@ -21,7 +21,7 @@ export class StreamsGateway implements OnGatewayConnection, OnGatewayDisconnect 
     private readonly logger = new Logger(StreamsGateway.name);
 
     @WebSocketServer()
-    server: Server;
+    server!: Server;
 
     constructor(private readonly providersService: ProvidersService) { }
 
@@ -45,7 +45,7 @@ export class StreamsGateway implements OnGatewayConnection, OnGatewayDisconnect 
                 client.emit('prefetch-link', { id, link });
             });
             client.emit('prefetch-complete', { success: true });
-        } catch (err) {
+        } catch (err: any) {
             this.logger.error(`WS Prefetch failed: ${err.message}`);
             client.emit('prefetch-complete', { success: false, error: err.message });
         }
@@ -59,7 +59,7 @@ export class StreamsGateway implements OnGatewayConnection, OnGatewayDisconnect 
         this.logger.log(`Find streams started via WS for ${data.id} (Request ID: ${data.requestId})`);
 
         try {
-            const links = await this.providersService.findStreamLinks(
+            const result = await this.providersService.findStreamLinks(
                 data.id,
                 data.season,
                 data.episode,
@@ -71,10 +71,10 @@ export class StreamsGateway implements OnGatewayConnection, OnGatewayDisconnect 
                 0
             );
 
-            client.emit('streams-complete', { links, requestId: data.requestId });
-        } catch (err) {
+            client.emit('streams-complete', { links: result.links, scraperStatuses: result.scraperStatuses, requestId: data.requestId });
+        } catch (err: any) {
             this.logger.error(`WS find-streams failed: ${err.message}`);
-            client.emit('streams-complete', { links: [], requestId: data.requestId });
+            client.emit('streams-complete', { links: [], scraperStatuses: [], requestId: data.requestId });
         }
     }
 }

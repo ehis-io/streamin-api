@@ -26,15 +26,4 @@ export class StreamsController {
       query.mediaType
     );
   }
-
-  @Get(':id/:season/:episode')
-  async getStreamsNested(
-    @Param('id') id: string,
-    @Param('season') season: string,
-    @Param('episode') episode: string,
-    @Query('type') type: 'sub' | 'dub' = 'sub',
-    @Query('mediaType') mediaType?: string,
-  ) {
-    return this.providersService.findStreamLinks(id, parseInt(season), parseInt(episode), type, mediaType);
-  }
 }

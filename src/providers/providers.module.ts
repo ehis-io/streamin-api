@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ProvidersService } from './providers.service';
+import { StreamValidationService } from './stream-validation.service';
+import { StreamCacheService } from './stream-cache.service';
 import { VidSrcScraper } from './scrapers/vidsrc.scraper';
 import { VidLinkScraper } from './scrapers/vidlink.scraper';
 import { GogoAnimeScraper } from './scrapers/gogoanime.scraper';
@@ -11,6 +13,8 @@ import { SCRAPER_TOKEN } from './scraper.interface';
   imports: [TmdbModule, PrismaModule],
   providers: [
     ProvidersService,
+    StreamValidationService,
+    StreamCacheService,
     VidSrcScraper,
     VidLinkScraper,
     GogoAnimeScraper,

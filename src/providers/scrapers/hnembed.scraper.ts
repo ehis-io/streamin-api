@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Scraper, ScraperSearchResult, StreamLink } from '../scraper.interface';
 import { PuppeteerService } from '../../puppeteer/puppeteer.service';
 
@@ -7,11 +8,14 @@ export class HnEmbedScraper implements Scraper {
   name = 'HnEmbed';
   priority = 10;
   private readonly logger = new Logger(HnEmbedScraper.name);
-  private readonly baseUrls = [
-    'https://hnembed.cc'
-  ];
+  private readonly baseUrls: string[];
 
-  constructor(private puppeteerService: PuppeteerService) { }
+  constructor(private puppeteerService: PuppeteerService, private configService: ConfigService) {
+    const urls = this.configService.get<string>('HNEMBED_BASE_URLS');
+    this.baseUrls = urls
+      ? urls.split(',').map(u => u.trim())
+      : ['https://hnembed.cc'];
+  }
 
   async search(query: string, tmdbId?: number, imdbId?: string, malId?: number, priority: number = 0, mediaType?: string): Promise<ScraperSearchResult[]> {
     this.logger.log(`Searching for ${query} (TMDB: ${tmdbId}, IMDB: ${imdbId}, Type: ${mediaType}) [Priority: ${priority}]`);

@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Scraper, ScraperSearchResult, StreamLink } from '../scraper.interface';
 import { PuppeteerService } from '../../puppeteer/puppeteer.service';
 
@@ -7,12 +8,14 @@ export class VidSrcScraper implements Scraper {
   name = 'VidSrc';
   priority = 100;
   private readonly logger = new Logger(VidSrcScraper.name);
-  private readonly baseUrls = [
-    'https://vidsrc-embed.ru',
-    'https://vidsrc-embed.su'
-  ];
+  private readonly baseUrls: string[];
 
-  constructor(private puppeteerService: PuppeteerService) { }
+  constructor(private puppeteerService: PuppeteerService, private configService: ConfigService) {
+    const urls = this.configService.get<string>('VIDSRC_BASE_URLS');
+    this.baseUrls = urls
+      ? urls.split(',').map(u => u.trim())
+      : ['https://vidsrc-embed.ru', 'https://vidsrc-embed.su'];
+  }
 
   async search(query: string, tmdbId?: number, imdbId?: string, malId?: number, priority: number = 0, mediaType?: string): Promise<ScraperSearchResult[]> {
     this.logger.log(`Searching for ${query} (TMDB: ${tmdbId}, IMDB: ${imdbId}, MAL: ${malId}, Type: ${mediaType}) [Priority: ${priority}]`);

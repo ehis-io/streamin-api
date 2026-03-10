@@ -2,12 +2,15 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ProvidersService } from './providers.service';
 import { TmdbService } from '../tmdb/tmdb.service';
 import { MALService } from '../mal/mal.service';
-import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { PrismaService } from '../prisma/prisma.service';
+import { StreamValidationService } from './stream-validation.service';
+import { StreamCacheService } from './stream-cache.service';
+import { ConfigService } from '@nestjs/config';
 import { SCRAPER_TOKEN } from './scraper.interface';
 
 describe('ProvidersService', () => {
   let service: ProvidersService;
+  let cacheService: StreamCacheService;
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -31,13 +34,6 @@ describe('ProvidersService', () => {
           }
         },
         {
-          provide: CACHE_MANAGER,
-          useValue: {
-            get: jest.fn(),
-            set: jest.fn(),
-          }
-        },
-        {
           provide: PrismaService,
           useValue: {
             streamedLink: {
@@ -50,11 +46,34 @@ describe('ProvidersService', () => {
               upsert: jest.fn(),
             }
           }
-        }
+        },
+        {
+          provide: StreamValidationService,
+          useValue: {
+            validateStream: jest.fn().mockResolvedValue(true),
+          }
+        },
+        {
+          provide: StreamCacheService,
+          useValue: {
+            buildCacheKey: jest.fn().mockReturnValue('test-key'),
+            getFromRedis: jest.fn().mockResolvedValue(null),
+            getFromDatabase: jest.fn().mockResolvedValue(null),
+            saveToRedis: jest.fn(),
+            saveToDatabase: jest.fn(),
+          }
+        },
+        {
+          provide: ConfigService,
+          useValue: {
+            get: jest.fn().mockReturnValue(30000),
+          }
+        },
       ],
     }).compile();
 
     service = module.get<ProvidersService>(ProvidersService);
+    cacheService = module.get<StreamCacheService>(StreamCacheService);
   });
 
   it('should be defined', () => {
@@ -62,42 +81,36 @@ describe('ProvidersService', () => {
   });
 
   describe('findStreamLinks', () => {
-    it('should retrieve links older than 4 hours but newer than 7 days from the database', async () => {
+    it('should return cached links from the database via StreamCacheService', async () => {
       const tmdbId = 12345;
       const title = 'Test Movie';
-      const dbSeason = null;
-      const dbEpisode = null;
-      const type = 'sub';
 
       (service as any).tmdbService.getDetails.mockResolvedValue({ title, id: tmdbId });
-      (service as any).cacheManager.get.mockResolvedValue(null);
 
-      const fiveHoursAgo = new Date(Date.now() - 5 * 60 * 60 * 1000);
       const mockDbLinks = [
         {
           url: 'http://test.com/stream.m3u8',
           quality: '1080p',
           isM3U8: true,
-          headers: null,
+          headers: undefined,
           provider: 'TestProvider',
-          createdAt: fiveHoursAgo
         }
       ];
 
-      (service as any).prisma.streamedLink.findMany.mockResolvedValue(mockDbLinks);
+      (cacheService.getFromDatabase as jest.Mock).mockResolvedValue(mockDbLinks);
 
-      const result = await service.findStreamLinks(tmdbId.toString(), undefined, undefined, type, 'movie');
+      const result = await service.findStreamLinks(tmdbId.toString(), undefined, undefined, 'sub', 'movie');
 
-      expect(result).toHaveLength(1);
-      expect(result[0].url).toBe('http://test.com/stream.m3u8');
-      expect((service as any).prisma.streamedLink.findMany).toHaveBeenCalledWith(expect.objectContaining({
-        where: expect.objectContaining({
-          tmdbId,
-          season: dbSeason,
-          episode: dbEpisode,
-          type,
-        })
-      }));
+      expect(result.links).toHaveLength(1);
+      expect(result.links[0].url).toBe('http://test.com/stream.m3u8');
+      expect(result.scraperStatuses).toHaveLength(1);
+      expect(result.scraperStatuses[0].name).toBe('cache:database');
+    });
+
+    it('should return empty result for invalid IDs', async () => {
+      const result = await service.findStreamLinks('invalid', undefined, undefined, 'sub', 'movie');
+      expect(result.links).toHaveLength(0);
+      expect(result.scraperStatuses).toHaveLength(0);
     });
   });
 });

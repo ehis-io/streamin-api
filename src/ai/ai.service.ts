@@ -5,7 +5,7 @@ import { GeneratedPlaylist } from './ai.types';
 
 @Injectable()
 export class AiService {
-    private readonly genAI: GoogleGenerativeAI;
+    private readonly genAI!: GoogleGenerativeAI;
     private readonly model: any;
     private readonly logger = new Logger(AiService.name);
 
@@ -13,7 +13,7 @@ export class AiService {
         const apiKey = this.configService.get<string>('GEMINI_API_KEY');
         if (apiKey) {
             this.genAI = new GoogleGenerativeAI(apiKey);
-            this.model = this.genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+            this.model = this.genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
         }
     }
 
@@ -43,7 +43,7 @@ Return ONLY valid JSON. No markdown backticks.`;
 
             const text = result.response.text().replace(/```json/g, '').replace(/```/g, '').trim();
             return JSON.parse(text);
-        } catch (e) {
+        } catch (e: any) {
             this.logger.error(`AI Generation failed: ${e.message}`);
             return null;
         }
