@@ -13,9 +13,27 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
   private readonly pagePool: { page: Page; context: any }[] = [];
   private queue: { priority: number; resolve: (val: { page: Page; context: any }) => void }[] = [];
 
+  private readonly proxyUrls: string[];
+  private proxyIndex = 0;
+
   constructor(private configService: ConfigService) {
     puppeteer.use(StealthPlugin());
     this.maxPages = this.configService.get<number>('PUPPETEER_MAX_PAGES', 10);
+
+    const proxyConfig = this.configService.get<string>('PROXY_URLS', '');
+    this.proxyUrls = proxyConfig
+      ? proxyConfig.split(',').map(u => u.trim()).filter(Boolean)
+      : [];
+    if (this.proxyUrls.length > 0) {
+      this.logger.log(`Proxy rotation enabled with ${this.proxyUrls.length} proxies`);
+    }
+  }
+
+  private getNextProxy(): string | null {
+    if (this.proxyUrls.length === 0) return null;
+    const proxy = this.proxyUrls[this.proxyIndex % this.proxyUrls.length];
+    this.proxyIndex++;
+    return proxy;
   }
 
   async onModuleInit() {
@@ -48,21 +66,29 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
     }
 
     try {
+      const launchArgs = [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--no-zygote',
+        '--no-first-run',
+        '--disable-extensions',
+        '--disable-component-update',
+        '--disable-features=Translate,OptimizationHints,MediaRouter,DefaultBrowserFreeOfferPrompt',
+        '--blink-settings=imagesEnabled=false',
+        '--js-flags="--max-old-space-size=256"'
+      ];
+
+      const proxy = this.getNextProxy();
+      if (proxy) {
+        launchArgs.push(`--proxy-server=${proxy}`);
+        this.logger.log(`Launching browser with proxy: ${proxy}`);
+      }
+
       this.browser = await (puppeteer as any).launch({
         headless: true,
-        args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage',
-          '--disable-gpu',
-          '--no-zygote',
-          '--no-first-run',
-          '--disable-extensions',
-          '--disable-component-update',
-          '--disable-features=Translate,OptimizationHints,MediaRouter,DefaultBrowserFreeOfferPrompt',
-          '--blink-settings=imagesEnabled=false',
-          '--js-flags="--max-old-space-size=256"'
-        ],
+        args: launchArgs,
       }) as Browser;
       this.logger.log('Puppeteer browser launched successfully');
     } catch (error) {

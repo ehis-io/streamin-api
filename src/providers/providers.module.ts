@@ -8,6 +8,9 @@ import { GogoAnimeScraper } from './scrapers/gogoanime.scraper';
 import { TmdbModule } from '../tmdb/tmdb.module';
 import { PrismaModule } from '../prisma/prisma.module';
 import { SCRAPER_TOKEN } from './scraper.interface';
+import { CircuitBreakerService } from './circuit-breaker.service';
+import { CacheWarmingService } from './cache-warming.service';
+import { StreamFreshnessService } from './stream-freshness.service';
 
 @Module({
   imports: [TmdbModule, PrismaModule],
@@ -15,6 +18,9 @@ import { SCRAPER_TOKEN } from './scraper.interface';
     ProvidersService,
     StreamValidationService,
     StreamCacheService,
+    CircuitBreakerService,
+    CacheWarmingService,
+    StreamFreshnessService,
     VidSrcScraper,
     VidLinkScraper,
     GogoAnimeScraper,

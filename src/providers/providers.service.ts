@@ -6,6 +6,7 @@ import { MALService } from '../mal/mal.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { StreamValidationService } from './stream-validation.service';
 import { StreamCacheService } from './stream-cache.service';
+import { CircuitBreakerService } from './circuit-breaker.service';
 import axios from 'axios';
 import * as http from 'http';
 import * as https from 'https';
@@ -15,15 +16,29 @@ const httpsAgent = new https.Agent({ keepAlive: true });
 
 export interface ScraperStatus {
   name: string;
-  status: 'success' | 'failed' | 'timeout' | 'no_results';
+  status: 'success' | 'failed' | 'timeout' | 'no_results' | 'circuit_open';
   linksFound: number;
   durationMs: number;
   error?: string;
+  circuitState?: 'closed' | 'open' | 'half-open';
 }
 
 export interface StreamResult {
   links: StreamLink[];
   scraperStatuses: ScraperStatus[];
+}
+
+/** Quality score for speculative completion weighting */
+function qualityScore(link: StreamLink): number {
+  if (!link.isM3U8) return 1;
+  const q = (link.quality || '').toLowerCase();
+  if (q.includes('1080')) return 10;
+  if (q.includes('720')) return 7;
+  if (q.includes('480')) return 4;
+  if (q.includes('360')) return 2;
+  // "auto" or master playlists typically serve adaptive quality
+  if (q.includes('auto') || link.url.includes('master')) return 8;
+  return 5;
 }
 
 @Injectable()
@@ -41,6 +56,7 @@ export class ProvidersService {
     private prisma: PrismaService,
     private validationService: StreamValidationService,
     private cacheService: StreamCacheService,
+    private circuitBreaker: CircuitBreakerService,
     private configService: ConfigService,
   ) {
     this.scrapers = Array.isArray(this.scrapers) ? this.scrapers : (this.scrapers ? [this.scrapers] : []);
@@ -55,6 +71,10 @@ export class ProvidersService {
 
   getScrapers(): Scraper[] {
     return this.scrapers;
+  }
+
+  getScraperHealth() {
+    return this.circuitBreaker.getAllHealth();
   }
 
   async findStreamLinks(
@@ -190,8 +210,48 @@ export class ProvidersService {
     let isTimedOut = false;
     const timeoutHandle = setTimeout(() => { isTimedOut = true; }, this.STREAM_TIMEOUT_MS);
 
+    // Speculative completion resolver
+    let speculativeResolve: (() => void) | null = null;
+    const speculativePromise = new Promise<void>(resolve => { speculativeResolve = resolve; });
+
+    const checkSpeculativeCompletion = () => {
+      const m3u8Links = allLinks.filter(l => l.isM3U8);
+      const totalQuality = m3u8Links.reduce((sum, l) => sum + qualityScore(l), 0);
+
+      // Resolve early if we have high-quality results
+      // Score >= 15 means e.g. one 1080p (10) + one auto (5), or two 720p (14 close enough)
+      if (totalQuality >= 15) {
+        this.logger.debug(`Speculative completion: quality score ${totalQuality} >= 15 threshold`);
+        speculativeResolve?.();
+        return;
+      }
+
+      // Original fallback: 3+ M3U8s regardless of quality
+      if (m3u8Links.length >= 3) {
+        this.logger.debug(`Speculative completion: ${m3u8Links.length} M3U8 links found`);
+        speculativeResolve?.();
+        return;
+      }
+    };
+
+    // Pipeline: launch all scrapers in parallel, each scraper searches + extracts + validates as a pipeline
     const scraperPromises = activeScrapers.map(async (scraper) => {
       const scraperStart = Date.now();
+
+      // Circuit breaker check
+      if (!this.circuitBreaker.isAvailable(scraper.name)) {
+        const health = this.circuitBreaker.getHealth(scraper.name);
+        this.logger.debug(`Skipping ${scraper.name}: circuit is ${health.state}`);
+        scraperStatuses.push({
+          name: scraper.name,
+          status: 'circuit_open',
+          linksFound: 0,
+          durationMs: 0,
+          circuitState: health.state,
+        });
+        return [];
+      }
+
       try {
         if (isTimedOut) {
           scraperStatuses.push({ name: scraper.name, status: 'timeout', linksFound: 0, durationMs: 0 });
@@ -248,84 +308,95 @@ export class ProvidersService {
           }
         }
 
-        const scraperLinksPromises = searchResults.map(async (result) => {
+        // Pipeline: start extracting from each search result immediately,
+        // validate each link as it arrives (don't wait for all extraction to finish)
+        const validLinks: (StreamLink & { provider: string })[] = [];
+
+        await Promise.all(searchResults.map(async (result) => {
           try {
             const streamParams = (activeMediaType === 'anime' || (season && episode))
               ? { season: season || 1, episode: episode || 1, type }
               : undefined;
 
             const links = await scraper.getStreamLinks(result.url, streamParams, priority);
-            return links.map(l => ({
+            const taggedLinks = links.map(l => ({
               ...l,
               provider: result.title.includes('(') ? result.title : `${scraper.name} (${new URL(result.url).hostname})`
             }) as (StreamLink & { provider: string }));
+
+            // Validate each link immediately as it comes in (pipelined)
+            await Promise.all(taggedLinks.map(async (link) => {
+              if (isTimedOut) return;
+              try {
+                const isValid = await this.validationService.validateStream(link.url, priority);
+                if (isValid) {
+                  await this.cacheService.saveToDatabase(link, activeMediaType!, tmdbId, malId, dbSeason, dbEpisode, type);
+                  validLinks.push(link);
+                  allLinks.push(link);
+                  if (onLinkFound) onLinkFound(link);
+                  checkSpeculativeCompletion();
+                }
+              } catch (valError: any) {
+                this.logger.warn(`Validation crashed for ${link.url}: ${valError.message}`);
+              }
+            }));
           } catch (e: any) {
             this.logger.warn(`${scraper.name} mirror ${result.url} failed: ${e.message}`);
-            return [];
           }
-        });
-
-        const nestedResults = await Promise.all(scraperLinksPromises);
-        const flatLinks = nestedResults.flat();
-
-        // Validate streams
-        const validationResults = await Promise.all(
-          flatLinks.map(async (link) => {
-            if (isTimedOut) return null;
-            try {
-              const isValid = await this.validationService.validateStream(link.url, priority);
-              if (isValid) {
-                await this.cacheService.saveToDatabase(link, activeMediaType!, tmdbId, malId, dbSeason, dbEpisode, type);
-                if (onLinkFound) onLinkFound(link);
-                return link;
-              }
-            } catch (valError: any) {
-              this.logger.warn(`Validation crashed for ${link.url}: ${valError.message}`);
-            }
-            return null;
-          })
-        );
-
-        const validLinks = validationResults.filter((l): l is StreamLink & { provider: string } => l !== null);
-        allLinks.push(...validLinks);
+        }));
 
         if (validLinks.length > 0) {
           this.cacheService.saveToRedis(cacheKey, allLinks);
         }
 
         const duration = Date.now() - scraperStart;
+
+        // Record circuit breaker metrics
+        if (validLinks.length > 0) {
+          this.circuitBreaker.recordSuccess(scraper.name, duration);
+        } else {
+          // no_results is still a "working" scraper, only record failure for actual errors
+          this.circuitBreaker.recordSuccess(scraper.name, duration);
+        }
+
         scraperStatuses.push({
           name: scraper.name,
           status: validLinks.length > 0 ? 'success' : 'no_results',
           linksFound: validLinks.length,
           durationMs: duration,
+          circuitState: this.circuitBreaker.getHealth(scraper.name).state,
         });
 
         return validLinks;
       } catch (e: any) {
         const duration = Date.now() - scraperStart;
         this.logger.error(`${scraper.name} CRITICAL FAILURE: ${e.message}`);
+        this.circuitBreaker.recordFailure(scraper.name, duration, e.message);
+
         scraperStatuses.push({
           name: scraper.name,
           status: 'failed',
           linksFound: 0,
           durationMs: duration,
           error: e.message,
+          circuitState: this.circuitBreaker.getHealth(scraper.name).state,
         });
         return [];
       }
     });
 
-    // Speculative completion with overall timeout
+    // Race between: all scrapers finishing, speculative completion, or timeout
     const startTime = Date.now();
 
     await Promise.race([
       Promise.all(scraperPromises),
+      speculativePromise,
       new Promise<void>((resolve) => {
         const interval = setInterval(() => {
+          // Fallback: 15s elapsed with at least 1 M3U8
           const m3u8Count = allLinks.filter(l => l.isM3U8).length;
-          if (m3u8Count >= 3 || (Date.now() - startTime > 15000 && m3u8Count >= 1)) {
-            this.logger.debug(`Speculative completion triggered with ${allLinks.length} links (${m3u8Count} M3U8)`);
+          if (Date.now() - startTime > 15000 && m3u8Count >= 1) {
+            this.logger.debug(`Time-based speculative completion: ${m3u8Count} M3U8 after 15s`);
             clearInterval(interval);
             resolve();
           }
