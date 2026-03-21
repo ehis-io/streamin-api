@@ -58,7 +58,7 @@ jobs:
 
       - name: 🏗️ Build app & Run Migrations
         run: |
-          npm run build
+          NODE_OPTIONS="--max_old_space_size=4096" npm run build
       #     npm run migration:run
 
       - name: 🚀 Reload PM2
