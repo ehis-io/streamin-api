@@ -14,7 +14,14 @@ export class VidSrcScraper implements Scraper {
     const urls = this.configService.get<string>('VIDSRC_BASE_URLS');
     this.baseUrls = urls
       ? urls.split(',').map(u => u.trim())
-      : ['https://vidsrc-embed.ru', 'https://vidsrc-embed.su'];
+      : [
+        'https://vidsrc-embed.ru',
+        'https://vidsrc-embed.su',
+        'https://vidsrc.me',
+        'https://vidsrc.pm',
+        'https://vidsrc.xyz',
+        'https://vidsrc.pro'
+      ];
   }
 
   async search(query: string, tmdbId?: number, imdbId?: string, malId?: number, priority: number = 0, mediaType?: string): Promise<ScraperSearchResult[]> {
@@ -101,11 +108,16 @@ export class VidSrcScraper implements Scraper {
         page.on('request', (request) => {
           const reqUrl = request.url();
           if (reqUrl.includes('.m3u8') && !reqUrl.includes('heartbeat')) {
+            const headers = request.headers();
+            const headersBase64 = Buffer.from(JSON.stringify(headers)).toString('base64');
+            const apiUrl = this.configService.get('API_URL', 'http://localhost:4001');
+            const proxiedUrl = `${apiUrl}/api/v1/streams/hls-proxy?url=${encodeURIComponent(reqUrl)}&headers=${headersBase64}`;
+
             const link = {
-              url: reqUrl,
+              url: proxiedUrl,
               quality: 'Auto',
               isM3U8: true,
-              headers: request.headers()
+              headers: headers
             };
             m3u8Links.push(link);
 
@@ -117,16 +129,39 @@ export class VidSrcScraper implements Scraper {
           }
         });
 
-        // Navigate with a shorter timeout
+        // Navigate and simulate user interaction to trigger HLS
         try {
-          await page.goto(embedUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
+          await page.goto(embedUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
+          
+          // Poll for links with a short interval instead of static sleep
+          for (let i = 0; i < 10 && m3u8Links.length === 0; i++) {
+            await new Promise(r => setTimeout(r, 200));
+          }
 
-          // Wait a maximum of 3 more seconds for dynamic links if none found yet
-          if (!isResolved && m3u8Links.length === 0) {
-            await new Promise(r => setTimeout(r, 3000));
+          // Try to click play button if no links found yet
+          if (m3u8Links.length === 0) {
+            this.logger.debug("Simulating interaction to trigger HLS...");
+            await page.evaluate(() => {
+              const selectors = [
+                '#play', '.play', '.play-button', '#player', 
+                '#vjs-big-play-button', '.vjs-big-play-button',
+                '.jw-display-icon-container', '.jw-icon-display'
+              ];
+              for (const s of selectors) {
+                const el = document.querySelector(s) as HTMLElement;
+                if (el) { el.click(); return true; }
+              }
+              // Fallback: click center of screen
+              document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 2)?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+            }).catch(() => {});
+          }
+
+          // Second poll after interaction
+          for (let i = 0; i < 15 && !isResolved && m3u8Links.length === 0; i++) {
+            await new Promise(r => setTimeout(r, 200));
           }
         } catch (e) {
-          this.logger.warn(`Navigation to ${embedUrl} timed out, checking extracted links...`);
+          this.logger.warn(`Navigation or interaction at ${embedUrl} timed out or failed: ${e.message}`);
         }
 
         if (!isResolved) {

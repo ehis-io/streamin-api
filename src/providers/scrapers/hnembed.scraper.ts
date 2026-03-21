@@ -95,11 +95,16 @@ export class HnEmbedScraper implements Scraper {
           if (reqUrl.includes('.m3u8') && !reqUrl.includes('heartbeat')) {
             this.logger.debug(`Found HnEmbed M3U8 link: ${reqUrl}`);
 
+            const headers = request.headers();
+            const headersBase64 = Buffer.from(JSON.stringify(headers)).toString('base64');
+            const apiUrl = this.configService.get('API_URL', 'http://localhost:4001');
+            const proxiedUrl = `${apiUrl}/api/v1/streams/hls-proxy?url=${encodeURIComponent(reqUrl)}&headers=${headersBase64}`;
+
             const streamLink = {
-              url: reqUrl,
+              url: proxiedUrl,
               quality: 'Auto',
               isM3U8: true,
-              headers: request.headers()
+              headers: headers
             };
 
             m3u8Links.push(streamLink);
@@ -110,23 +115,38 @@ export class HnEmbedScraper implements Scraper {
               resolveLinks([streamLink]);
             } else {
               // If we find ANY m3u8, wait a tiny bit for more but resolve quickly
-              setTimeout(() => {
-                if (!isResolved && m3u8Links.length > 0) {
-                  this.logger.debug(`Resolving with first found stream after short wait`);
-                  resolveLinks([m3u8Links[0]]);
-                }
-              }, 2000);
+              // If we find ANY m3u8, resolve immediately if it's the first one
+              this.logger.debug(`Found HnEmbed stream, resolving quickly`);
+              resolveLinks([streamLink]);
             }
           }
         });
 
         try {
           // Use 'domcontentloaded' for faster navigation as we only care about requests
-          await page.goto(embedUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+          await page.goto(embedUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
 
-          // Wait a maximum of 3 more seconds if no links found yet
+          // Polling for initial load
+          for (let i = 0; i < 10 && m3u8Links.length === 0; i++) {
+            await new Promise(r => setTimeout(r, 200));
+          }
+
+          // Try to click play button if no links found yet
           if (m3u8Links.length === 0) {
-            await new Promise(r => setTimeout(r, 3000));
+            this.logger.debug("Simulating interaction for HnEmbed...");
+            await page.evaluate(() => {
+              const selectors = ['#play', '.play', '#player', '.vjs-big-play-button', '#video-player'];
+              for (const s of selectors) {
+                const el = document.querySelector(s) as HTMLElement;
+                if (el) { el.click(); return true; }
+              }
+              document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 2)?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+            }).catch(() => {});
+          }
+
+          // Polling after interaction
+          for (let i = 0; i < 20 && !isResolved && m3u8Links.length === 0; i++) {
+            await new Promise(r => setTimeout(r, 250));
           }
         } catch (e) {
           this.logger.warn(`Navigation to ${embedUrl} timed out or interrupted`);

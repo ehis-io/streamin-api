@@ -1,4 +1,4 @@
-import { Injectable, Inject, Logger } from '@nestjs/common';
+import { Injectable, Inject, Logger, NotFoundException, InternalServerErrorException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import type { Cache } from 'cache-manager';
@@ -43,10 +43,13 @@ export class TmdbService {
         this.logger.warn(`Failed to cache TMDB response for ${key}: ${cacheError.message}`);
       }
       return this.filterFutureContent(response.data);
-    } catch (e) {
+    } catch (e: any) {
+      if (e.response?.status === 404) {
+        this.logger.warn(`TMDB content not found for ${url}`);
+        throw new NotFoundException('Content not found on TMDB');
+      }
       this.logger.error(`TMDB request failed for ${url}: ${e.message}`, e.stack);
-      console.error('[TMDB ERROR]', e);
-      throw e;
+      throw new InternalServerErrorException(`TMDB request failed: ${e.message}`);
     }
   }
 
@@ -80,11 +83,19 @@ export class TmdbService {
   }
 
   async getTrending(type: 'movie' | 'tv' | 'all' = 'movie', page: number = 1) {
-    return this.getCachedRequest(`trending:${type}:page:${page}`, `${this.baseUrl}/trending/${type}/day`, { page });
+    const data = await this.getCachedRequest(`trending:${type}:page:${page}`, `${this.baseUrl}/trending/${type}/day`, { page });
+    if (type !== 'all' && data?.results) {
+      data.results = data.results.map((item: any) => ({ ...item, media_type: type }));
+    }
+    return data;
   }
 
   async search(query: string, type: 'movie' | 'tv' = 'movie', page: number = 1) {
-    return this.getCachedRequest(`search:${type}:${query}:page:${page}`, `${this.baseUrl}/search/${type}`, { query, page });
+    const data = await this.getCachedRequest(`search:${type}:${query}:page:${page}`, `${this.baseUrl}/search/${type}`, { query, page });
+    if (data?.results) {
+      data.results = data.results.map((item: any) => ({ ...item, media_type: type }));
+    }
+    return data;
   }
 
   async searchMulti(query: string, page: number = 1) {
@@ -113,7 +124,11 @@ export class TmdbService {
     } = params;
 
     const cacheKey = `discover:${type}:p${page}:g${with_genres}:s${sort_by}:d${dateGte}-${dateLte}:ad${airDateGte}-${airDateLte}:v${voteGte}`;
-    return this.getCachedRequest(cacheKey, `${this.baseUrl}/discover/${type}`, params);
+    const data = await this.getCachedRequest(cacheKey, `${this.baseUrl}/discover/${type}`, params);
+    if (data?.results) {
+      data.results = data.results.map((item: any) => ({ ...item, media_type: type }));
+    }
+    return data;
   }
 
   async getRecommendations(id: number, type: 'movie' | 'tv' = 'movie', page: number = 1) {

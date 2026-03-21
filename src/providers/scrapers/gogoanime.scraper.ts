@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Scraper, ScraperSearchResult, StreamLink } from '../scraper.interface';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
@@ -10,6 +11,7 @@ export class GogoAnimeScraper implements Scraper {
     supportedTypes = ['anime', 'tv'];
     private readonly logger = new Logger(GogoAnimeScraper.name);
     private readonly baseUrl = 'https://gogoanime.by';
+    constructor(private configService: ConfigService) { }
     private readonly headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -165,8 +167,19 @@ export class GogoAnimeScraper implements Scraper {
 
                     if (dataVideo) {
                         const videoUrl = dataVideo.startsWith('//') ? 'https:' + dataVideo : dataVideo;
+                        let finalUrl = videoUrl;
+                        if (videoUrl.includes('.m3u8')) {
+                            const apiUrl = this.configService.get('API_URL', 'http://localhost:4001');
+                            const proxyHeaders = {
+                                'Referer': this.baseUrl,
+                                'Origin': this.baseUrl
+                            };
+                            const headersBase64 = Buffer.from(JSON.stringify(proxyHeaders)).toString('base64');
+                            finalUrl = `${apiUrl}/api/v1/streams/hls-proxy?url=${encodeURIComponent(videoUrl)}&headers=${headersBase64}`;
+                        }
+
                         streamLinks.push({
-                            url: videoUrl,
+                            url: finalUrl,
                             quality: serverName,
                             isM3U8: videoUrl.includes('.m3u8'),
                             type,
@@ -183,8 +196,19 @@ export class GogoAnimeScraper implements Scraper {
             if (streamLinks.length === 0) {
                 const iframeSrc = $('#player iframe, .player-embed iframe, .video-player iframe').attr('src');
                 if (iframeSrc) {
+                    let finalUrl = iframeSrc;
+                    if (iframeSrc.includes('.m3u8')) {
+                        const apiUrl = this.configService.get('API_URL', 'http://localhost:4001');
+                        const proxyHeaders = {
+                            'Referer': this.baseUrl,
+                            'Origin': this.baseUrl
+                        };
+                        const headersBase64 = Buffer.from(JSON.stringify(proxyHeaders)).toString('base64');
+                        finalUrl = `${apiUrl}/api/v1/streams/hls-proxy?url=${encodeURIComponent(iframeSrc)}&headers=${headersBase64}`;
+                    }
+
                     streamLinks.push({
-                        url: iframeSrc,
+                        url: finalUrl,
                         quality: 'Main Server',
                         isM3U8: iframeSrc.includes('.m3u8'),
                         type,

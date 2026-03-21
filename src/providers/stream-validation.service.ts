@@ -15,7 +15,30 @@ export class StreamValidationService {
   private readonly coolingDownDomains = new Map<string, number>();
 
   async validateStream(url: string, priority: number = 0): Promise<boolean> {
+    // 🛡️ Skip validation for ALL internal proxy links (hls-proxy or any localhost API URL)
+    if (
+      url.includes('/api/v1/streams/hls-proxy') ||
+      url.includes('/api/v1/streams/proxy') ||
+      url.includes('localhost:4001') ||
+      url.includes('127.0.0.1:4001')
+    ) {
+      this.logger.debug(`Skipping validation for internal proxy link: ${url.substring(0, 80)}`);
+      return true;
+    }
+
     const domain = new URL(url).hostname;
+
+    // Auto-accept well-known CDN M3U8 patterns — these are always valid if intercepted
+    if (url.includes('.m3u8') && (
+      domain.includes('akamaized.net') ||
+      domain.includes('cloudfront.net') ||
+      domain.includes('.hls.') ||
+      domain.includes('fastly.net')
+    )) {
+      this.logger.debug(`Auto-accepting CDN M3U8 link: ${url.substring(0, 80)}`);
+      return true;
+    }
+
     const isRestricted = domain.includes('vidsrc') ||
       domain.includes('vidlink.pro') ||
       domain.includes('gogoanime') ||

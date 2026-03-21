@@ -184,18 +184,27 @@ export class ProvidersService {
 
     // 1. Check Redis Cache
     const cacheKey = this.cacheService.buildCacheKey(activeMediaType!, tmdbId, malId, dbSeason, dbEpisode, type);
+    // 1. Check Redis Cache
     const cachedRedis = await this.cacheService.getFromRedis(cacheKey);
-    if (cachedRedis) {
+    const hasM3U8Redis = cachedRedis?.some(l => l.isM3U8);
+
+    if (cachedRedis && hasM3U8Redis) {
       if (onLinkFound) cachedRedis.forEach(link => onLinkFound(link));
       return { links: cachedRedis, scraperStatuses: [{ name: 'cache:redis', status: 'success', linksFound: cachedRedis.length, durationMs: 0 }] };
     }
 
     // 2. Check DB
     const cachedDb = await this.cacheService.getFromDatabase(activeMediaType!, tmdbId, malId, dbSeason, dbEpisode, type);
-    if (cachedDb) {
-      this.logger.log(`Found ${cachedDb.length} cached links for ${title} in the database`);
+    const hasM3U8Db = cachedDb?.some(l => l.isM3U8);
+
+    if (cachedDb && hasM3U8Db) {
+      this.logger.log(`Found ${cachedDb.length} cached links (including M3U8) for ${title} in the database`);
       if (onLinkFound) cachedDb.forEach(link => onLinkFound(link));
       return { links: cachedDb, scraperStatuses: [{ name: 'cache:database', status: 'success', linksFound: cachedDb.length, durationMs: 0 }] };
+    }
+
+    if ((cachedRedis && cachedRedis.length > 0) || (cachedDb && cachedDb.length > 0)) {
+       this.logger.log(`Found cached links for ${title}, but no M3U8. Proceeding with fresh scrape...`);
     }
 
     this.logger.log(`Resolving streams for ${title} (${activeMediaType}) - S${dbSeason} E${dbEpisode} [Priority: ${priority}]`);
@@ -216,19 +225,10 @@ export class ProvidersService {
 
     const checkSpeculativeCompletion = () => {
       const m3u8Links = allLinks.filter(l => l.isM3U8);
-      const totalQuality = m3u8Links.reduce((sum, l) => sum + qualityScore(l), 0);
-
-      // Resolve early if we have high-quality results
-      // Score >= 15 means e.g. one 1080p (10) + one auto (5), or two 720p (14 close enough)
-      if (totalQuality >= 15) {
-        this.logger.debug(`Speculative completion: quality score ${totalQuality} >= 15 threshold`);
-        speculativeResolve?.();
-        return;
-      }
-
-      // Original fallback: 3+ M3U8s regardless of quality
-      if (m3u8Links.length >= 3) {
-        this.logger.debug(`Speculative completion: ${m3u8Links.length} M3U8 links found`);
+      
+      // Resolve immediately once at least one HLS link is found
+      if (m3u8Links.length >= 1) {
+        this.logger.debug(`Instant completion: First M3U8 link found, resolving for speed`);
         speculativeResolve?.();
         return;
       }
@@ -318,7 +318,29 @@ export class ProvidersService {
               ? { season: season || 1, episode: episode || 1, type }
               : undefined;
 
-            const links = await scraper.getStreamLinks(result.url, streamParams, priority);
+            let links = await scraper.getStreamLinks(result.url, streamParams, priority);
+
+            // 🛡️ RECURSIVE RESOLUTION: If any link is a known mirror, resolve it to M3U8
+            const mirrorsScraper = this.scrapers.find(s => s.name === 'MirrorResolver');
+            if (mirrorsScraper) {
+              const resolvedLinks: StreamLink[] = [];
+              for (const link of links) {
+                const isMirror = /streamwish|filemoon|voe\.sx|doodstream|mixdrop|upstream/i.test(link.url);
+                if (isMirror && !link.isM3U8) {
+                  this.logger.debug(`Found mirror link, attempting deep resolution: ${link.url}`);
+                  const deepLinks = await mirrorsScraper.getStreamLinks(link.url, streamParams, priority);
+                  if (deepLinks.length > 0) {
+                    resolvedLinks.push(...deepLinks);
+                  } else {
+                    resolvedLinks.push(link); // Keep original if resolution fails
+                  }
+                } else {
+                  resolvedLinks.push(link);
+                }
+              }
+              links = resolvedLinks;
+            }
+
             const taggedLinks = links.map(l => ({
               ...l,
               provider: result.title.includes('(') ? result.title : `${scraper.name} (${new URL(result.url).hostname})`
@@ -333,11 +355,14 @@ export class ProvidersService {
                   await this.cacheService.saveToDatabase(link, activeMediaType!, tmdbId, malId, dbSeason, dbEpisode, type);
                   validLinks.push(link);
                   allLinks.push(link);
+                  this.logger.log(`Valid link found (${link.isM3U8 ? 'HLS' : 'Direct'}): ${link.url.substring(0, 100)}...`);
                   if (onLinkFound) onLinkFound(link);
                   checkSpeculativeCompletion();
+                } else {
+                  this.logger.warn(`REJECTED by validation: ${link.url.substring(0, 100)}...`);
                 }
               } catch (valError: any) {
-                this.logger.warn(`Validation crashed for ${link.url}: ${valError.message}`);
+                this.logger.error(`Validation crashed for ${link.url}: ${valError.message}`);
               }
             }));
           } catch (e: any) {
@@ -393,10 +418,10 @@ export class ProvidersService {
       speculativePromise,
       new Promise<void>((resolve) => {
         const interval = setInterval(() => {
-          // Fallback: 15s elapsed with at least 1 M3U8
+          // Fallback: 7s elapsed with at least 1 M3U8
           const m3u8Count = allLinks.filter(l => l.isM3U8).length;
-          if (Date.now() - startTime > 15000 && m3u8Count >= 1) {
-            this.logger.debug(`Time-based speculative completion: ${m3u8Count} M3U8 after 15s`);
+          if (Date.now() - startTime > 4000 && m3u8Count >= 1) {
+            this.logger.debug(`Time-based speculative completion: ${m3u8Count} M3U8 after 4s`);
             clearInterval(interval);
             resolve();
           }

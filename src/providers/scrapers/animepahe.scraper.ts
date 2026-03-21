@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Scraper, ScraperSearchResult, StreamLink } from '../scraper.interface';
 import { PuppeteerService } from '../../puppeteer/puppeteer.service';
 
@@ -9,7 +10,7 @@ export class AnimePaheScraper implements Scraper {
     private readonly logger = new Logger(AnimePaheScraper.name);
     private readonly baseUrl = 'https://animepahe.si';
 
-    constructor(private puppeteerService: PuppeteerService) { }
+    constructor(private puppeteerService: PuppeteerService, private configService: ConfigService) { }
 
     async search(query: string, tmdbId?: number, imdbId?: string, malId?: number, priority: number = 0, mediaType?: string): Promise<ScraperSearchResult[]> {
         return this.puppeteerService.withPage(async (page) => {
@@ -111,12 +112,30 @@ export class AnimePaheScraper implements Scraper {
             this.logger.log(`Puppeteer loading play page: ${playUrl}`);
             await page.goto(playUrl, { waitUntil: 'domcontentloaded' });
 
-            // 3. Extract Kwik Links
-            // Wait for resolution buttons
+            const m3u8Links: StreamLink[] = [];
+            page.on('request', (request) => {
+                const reqUrl = request.url();
+                if (reqUrl.includes('.m3u8')) {
+                    const headers = request.headers();
+                    const headersBase64 = Buffer.from(JSON.stringify(headers)).toString('base64');
+                    const apiUrl = this.configService.get('API_URL', 'http://localhost:4001');
+                    m3u8Links.push({
+                        url: `${apiUrl}/api/v1/streams/hls-proxy?url=${encodeURIComponent(reqUrl)}&headers=${headersBase64}`,
+                        quality: 'Auto (Captured)',
+                        isM3U8: true,
+                        headers: headers
+                    });
+                }
+            });
+
+            // 3. Try to trigger player
             try {
                 await page.waitForSelector('#resolutionMenu > button', { timeout: 5000 });
+                // Click the first resolution button to trigger M3U8
+                await page.click('#resolutionMenu > button');
+                await new Promise(r => setTimeout(r, 4000));
             } catch {
-                this.logger.warn('Timeout waiting for resolution menu');
+                this.logger.warn('Timeout waiting for resolution menu in AnimePahe');
             }
 
             const links = await page.evaluate(() => {
@@ -128,13 +147,20 @@ export class AnimePaheScraper implements Scraper {
                 })).filter(l => l.url);
             });
 
-            return links.map(l => ({
-                ...l,
-                headers: {
-                    'Referer': 'https://kwik.cx/',
-                    'Origin': 'https://kwik.cx'
+            // Merge captured M3U8s with evaluated links
+            const finalLinks: StreamLink[] = [...(links as StreamLink[])];
+            m3u8Links.forEach(m => {
+                const mUrlPart = m.url.split('url=')[1]?.split('&')[0] || '';
+                if (!finalLinks.some(l => l.url.includes(encodeURIComponent(mUrlPart)))) {
+                    finalLinks.push({
+                        url: m.url,
+                        quality: m.quality || 'Auto',
+                        isM3U8: true,
+                        headers: m.headers
+                    });
                 }
-            }));
+            });
+            return finalLinks;
         }, priority).catch(e => {
             this.logger.error(`AnimePahe Puppeteer scraping failed: ${e.message}`);
             return [];

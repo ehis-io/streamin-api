@@ -96,11 +96,16 @@ export class VidLinkScraper implements Scraper {
           const reqUrl = request.url();
           if (reqUrl.includes('.m3u8')) {
             this.logger.debug(`Found VidLink M3U8 early: ${reqUrl}`);
+            const headers = request.headers();
+            const headersBase64 = Buffer.from(JSON.stringify(headers)).toString('base64');
+            const apiUrl = this.configService.get('API_URL', 'http://localhost:4001');
+            const proxiedUrl = `${apiUrl}/api/v1/streams/hls-proxy?url=${encodeURIComponent(reqUrl)}&headers=${headersBase64}`;
+
             m3u8Links.push({
-              url: reqUrl,
+              url: proxiedUrl,
               quality: 'Auto',
               isM3U8: true,
-              headers: request.headers()
+              headers: headers
             });
 
             // Resolve early for master playlist
@@ -112,14 +117,32 @@ export class VidLinkScraper implements Scraper {
 
         try {
           // VidLink usually loads M3U8s very early after DOM content
-          await page.goto(finalUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+          await page.goto(finalUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
           
-          // Wait a max of 3s for slow injectors
+          // Responsive polling for links
+          for (let i = 0; i < 10 && m3u8Links.length === 0; i++) {
+            await new Promise(r => setTimeout(r, 200));
+          }
+
+          // Try to click play button if no links found yet
           if (m3u8Links.length === 0) {
-            await new Promise(r => setTimeout(r, 3000));
+            this.logger.debug("Simulating interaction for VidLink...");
+            await page.evaluate(() => {
+              const selectors = ['#play', '.play', '#player', '.vjs-big-play-button'];
+              for (const s of selectors) {
+                const el = document.querySelector(s) as HTMLElement;
+                if (el) { el.click(); return true; }
+              }
+              document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 2)?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+            }).catch(() => {});
+          }
+
+          // Second polling pass after interaction
+          for (let i = 0; i < 15 && !isResolved && m3u8Links.length === 0; i++) {
+            await new Promise(r => setTimeout(r, 200));
           }
         } catch (e) {
-          this.logger.warn(`VidLink navigation timed out, checking extracted links...`);
+          this.logger.warn(`VidLink navigation or interaction timed out`);
         }
 
         if (m3u8Links.length > 0) {

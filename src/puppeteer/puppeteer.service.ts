@@ -38,12 +38,13 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleInit() {
     await this.ensureBrowser();
-    // Pre-warm the pool with a couple of pages
-    this.logger.log('Pre-warming Puppeteer page pool...');
-    for (let i = 0; i < 2; i++) {
-      const warmed = await this.createNewPage();
+    // Pre-warm the pool with more pages to handle initial bursts
+    this.logger.log('Pre-warming Puppeteer page pool (4 pages)...');
+    const warmTasks = Array(4).fill(null).map(() => this.createNewPage());
+    const results = await Promise.all(warmTasks);
+    results.forEach(warmed => {
       if (warmed) this.pagePool.push(warmed);
-    }
+    });
   }
 
   async onModuleDestroy() {
@@ -75,7 +76,24 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
         '--no-first-run',
         '--disable-extensions',
         '--disable-component-update',
-        '--disable-features=Translate,OptimizationHints,MediaRouter,DefaultBrowserFreeOfferPrompt',
+        '--disable-background-networking',
+        '--disable-background-timer-throttling',
+        '--disable-backgrounding-occluded-windows',
+        '--disable-breakpad',
+        '--disable-client-side-phishing-detection',
+        '--disable-default-apps',
+        '--disable-hang-monitor',
+        '--disable-ipc-flooding-protection',
+        '--disable-notifications',
+        '--disable-prompt-on-repost',
+        '--disable-renderer-backgrounding',
+        '--disable-sync',
+        '--force-color-profile=srgb',
+        '--metrics-recording-only',
+        '--no-default-browser-check',
+        '--password-store=basic',
+        '--use-mock-keychain',
+        '--disable-features=Translate,OptimizationHints,MediaRouter,DefaultBrowserFreeOfferPrompt,IsolateOrigins,site-per-process',
         '--blink-settings=imagesEnabled=false',
         '--js-flags="--max-old-space-size=256"'
       ];
@@ -104,12 +122,10 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
       const page = await context.newPage();
 
       await page.setRequestInterception(true);
-      const blockedResources = ['image', 'stylesheet', 'font', 'media', 'other', 'manifest', 'texttrack', 'eventsource', 'websocket'];
+      const blockedResources = ['image', 'stylesheet', 'font', 'manifest', 'texttrack', 'eventsource', 'websocket'];
       const blockedDomains = [
         'google-analytics.com', 'googletagmanager.com', 'doubleclick.net',
-        'onesignal.com', 'adsbygoogle', 'crashlytics.com', 'facebook.net',
-        'cloudfront.net', 'hotjar.com', 'sentry.io', 'mixpanel.com',
-        'amazon-adsystem.com', 'adnxs.com', 'pubmatic.com', 'rubiconproject.com'
+        'onesignal.com', 'adsbygoogle', 'crashlytics.com', 'facebook.net'
       ];
 
       page.on('request', (request) => {
@@ -172,7 +188,10 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
           const url = request.url().toLowerCase();
           const resourceType = request.resourceType();
           if (url.includes('.m3u8')) { request.continue(); return; }
-          if (['image', 'stylesheet', 'font', 'media', 'other'].includes(resourceType)) {
+          const blockedResources = ['image', 'stylesheet', 'font', 'manifest', 'texttrack', 'eventsource', 'websocket'];
+          const blockedDomains = ['google-analytics.com', 'googletagmanager.com', 'doubleclick.net', 'onesignal.com', 'adsbygoogle', 'crashlytics.com', 'facebook.net'];
+          
+          if (blockedResources.includes(resourceType) || blockedDomains.some(domain => url.includes(domain))) {
             request.abort();
           } else {
             request.continue();
