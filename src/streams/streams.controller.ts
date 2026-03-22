@@ -23,6 +23,7 @@ export class StreamsController {
   }
 
   @Get('hls-proxy')
+  @Get('proxy') // Legacy support for old cached links
   async proxy(
     @Query('url') url: string,
     @Query('headers') headers: string,
@@ -47,10 +48,6 @@ export class StreamsController {
     @Param('id') id: string,
     @Query() query: GetStreamsDto,
   ) {
-    if (id === 'proxy') {
-       // This shouldn't happen with correct ordering but adding safety
-       throw new HttpException('Route conflict caught by guard', HttpStatus.BAD_REQUEST);
-    }
     return this.providersService.findStreamLinks(
       id,
       query.season,
