@@ -63,6 +63,14 @@ export class MALService {
         );
     }
 
+    async getEpisodes(id: number) {
+        return this.getCachedRequest(`mal:episodes:${id}`, async () => {
+             const axios = require('axios');
+             const { data } = await axios.get(`https://api.jikan.moe/v4/anime/${id}/episodes`);
+             return data;
+        }, 14400000); // 4 hour cache for airing episodes
+    }
+
     async getGenres() {
         return this.getCachedRequest(`mal:genres`, () =>
             this.genresEndpoint.getAnimeGenres()

@@ -40,6 +40,11 @@ export class AnimesController {
         return this.animesService.getRecommendations(+id);
     }
 
+    @Get(':id/episodes')
+    getEpisodes(@Param('id') id: string) {
+        return this.animesService.getEpisodes(+id);
+    }
+
     @Get(':id')
     getDetails(@Param('id') id: string) {
         return this.animesService.getDetails(+id);

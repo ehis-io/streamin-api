@@ -53,6 +53,10 @@ export class AnimesService {
         };
     }
 
+    async getEpisodes(id: number) {
+        return this.malService.getEpisodes(id);
+    }
+
     private cleanSynopsis(synopsis: string): string {
         if (!synopsis) return synopsis;
         return synopsis
