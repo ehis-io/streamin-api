@@ -11,7 +11,7 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
   private readonly maxPages: number;
   private activePages = 0;
   private readonly pagePool: { page: Page; context: any }[] = [];
-  private queue: { priority: number; resolve: (val: { page: Page; context: any }) => void }[] = [];
+  private queue: { priority: number; resolve: (val: { page: Page; context: any }) => void; reject: (err: any) => void }[] = [];
 
   private readonly proxyUrls: string[];
   private proxyIndex = 0;
@@ -107,6 +107,7 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
       this.browser = await (puppeteer as any).launch({
         headless: true,
         args: launchArgs,
+        protocolTimeout: 240000,
       }) as Browser;
       this.logger.log('Puppeteer browser launched successfully');
     } catch (error) {
@@ -122,7 +123,7 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
       const page = await context.newPage();
 
       await page.setRequestInterception(true);
-      const blockedResources = ['image', 'stylesheet', 'font', 'manifest', 'texttrack', 'eventsource', 'websocket'];
+      const blockedResources = ['image', 'stylesheet', 'font', 'manifest', 'texttrack', 'eventsource', 'websocket', 'media', 'other'];
       const blockedDomains = [
         'google-analytics.com', 'googletagmanager.com', 'doubleclick.net',
         'onesignal.com', 'adsbygoogle', 'crashlytics.com', 'facebook.net'
@@ -165,8 +166,8 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
 
     if (!pageObj) {
       this.logger.debug(`No pages available. Queuing request with priority ${priority}...`);
-      pageObj = await new Promise<{ page: Page; context: any }>((resolve) => {
-        this.queue.push({ priority, resolve });
+      pageObj = await new Promise<{ page: Page; context: any }>((resolve, reject) => {
+        this.queue.push({ priority, resolve, reject });
         this.queue.sort((a, b) => a.priority - b.priority);
       });
       this.activePages++;
@@ -188,7 +189,7 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
           const url = request.url().toLowerCase();
           const resourceType = request.resourceType();
           if (url.includes('.m3u8')) { request.continue(); return; }
-          const blockedResources = ['image', 'stylesheet', 'font', 'manifest', 'texttrack', 'eventsource', 'websocket'];
+          const blockedResources = ['image', 'stylesheet', 'font', 'manifest', 'texttrack', 'eventsource', 'websocket', 'media', 'other'];
           const blockedDomains = ['google-analytics.com', 'googletagmanager.com', 'doubleclick.net', 'onesignal.com', 'adsbygoogle', 'crashlytics.com', 'facebook.net'];
           
           if (blockedResources.includes(resourceType) || blockedDomains.some(domain => url.includes(domain))) {
@@ -216,7 +217,7 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
 
   private processQueue() {
     if (this.queue.length > 0 && (this.pagePool.length > 0 || this.activePages < this.maxPages)) {
-      const { resolve } = this.queue.shift()!;
+      const { resolve, reject } = this.queue.shift()!;
 
       let pageObj: { page: Page; context: any } | null = null;
       if (this.pagePool.length > 0) {
@@ -229,7 +230,15 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
         // If no pooled page but we have capacity, it will be handled by the next tick of withPage's queue processing
         // Actually, we should create it here if we have capacity
         this.createNewPage().then(p => {
-          if (p) resolve(p);
+          if (p) {
+              resolve(p);
+          } else {
+              this.activePages--; // Need to decrement since allocating a slot failed
+              reject(new Error("Puppeteer connection timeout: could not allocate a new browser page."));
+          }
+        }).catch(err => {
+            this.activePages--;
+            reject(err);
         });
       }
     }
