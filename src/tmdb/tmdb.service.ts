@@ -11,6 +11,7 @@ export class TmdbService {
   private readonly apiKey: string;
   private readonly logger = new Logger(TmdbService.name);
   private readonly httpsAgent = new https.Agent({ family: 4 });
+  private readonly inFlightRequests = new Map<string, Promise<any>>();
 
   constructor(
     private configService: ConfigService,
@@ -20,37 +21,58 @@ export class TmdbService {
   }
 
   private async getCachedRequest(key: string, url: string, params: any, ttl: number = 604800000) {
-    const cached = await this.cacheManager.get(key.replace(/[:\s?&]/g, '_'));
+    const cacheKey = key.replace(/[:\s?&]/g, '_');
+    const cached = await this.cacheManager.get(cacheKey);
     if (cached) {
       return this.filterFutureContent(cached);
     }
 
     if (!this.apiKey || this.apiKey.includes('your_tmdb_api_key')) {
       this.logger.warn(`TMDB API Key missing or invalid. Returning empty/mock for ${key}`);
-      // Return minimal mock to prevent crash during setup
       return { results: [], mock: true };
     }
 
-    try {
-      this.logger.debug(`Fetching TMDB: ${url}`);
-      const response = await axios.get(url, { 
-        params: { ...params, api_key: this.apiKey },
-        httpsAgent: this.httpsAgent
-      });
+    // Deduplicate concurrent requests for the same TMDB resource
+    if (this.inFlightRequests.has(cacheKey)) {
+      this.logger.debug(`[Deduplication] Joining in-flight TMDB request for ${cacheKey}`);
       try {
-        await this.cacheManager.set(key.replace(/[:\s?&]/g, '_'), response.data, ttl);
-      } catch (cacheError) {
-        this.logger.warn(`Failed to cache TMDB response for ${key}: ${cacheError.message}`);
+        const responseData = await this.inFlightRequests.get(cacheKey);
+        return this.filterFutureContent(responseData);
+      } catch (e) {
+        // If the in-flight fails, we fall through and try again or just let it throw
+        throw e;
       }
-      return this.filterFutureContent(response.data);
-    } catch (e: any) {
-      if (e.response?.status === 404) {
-        this.logger.warn(`TMDB content not found for ${url}`);
-        throw new NotFoundException('Content not found on TMDB');
-      }
-      this.logger.error(`TMDB request failed for ${url}: ${e.message}`, e.stack);
-      throw new InternalServerErrorException(`TMDB request failed: ${e.message}`);
     }
+
+    const fetchPromise = (async () => {
+      try {
+        this.logger.debug(`Fetching TMDB: ${url}`);
+        const response = await axios.get(url, { 
+          params: { ...params, api_key: this.apiKey },
+          httpsAgent: this.httpsAgent,
+          timeout: 10000 // 10s timeout to prevent hanging the Event Loop for 50s
+        });
+        try {
+          await this.cacheManager.set(cacheKey, response.data, ttl);
+        } catch (cacheError) {
+          this.logger.warn(`Failed to cache TMDB response for ${key}: ${cacheError.message}`);
+        }
+        return response.data;
+      } catch (e: any) {
+        if (e.response?.status === 404) {
+          this.logger.warn(`TMDB content not found for ${url}`);
+          throw new NotFoundException('Content not found on TMDB');
+        }
+        this.logger.error(`TMDB request failed for ${url}: ${e.message}`, e.stack);
+        throw new InternalServerErrorException(`TMDB request failed: ${e.message}`);
+      } finally {
+        this.inFlightRequests.delete(cacheKey);
+      }
+    })();
+
+    this.inFlightRequests.set(cacheKey, fetchPromise);
+    const result = await fetchPromise;
+    return this.filterFutureContent(result);
   }
 
   private filterFutureContent(data: any): any {
