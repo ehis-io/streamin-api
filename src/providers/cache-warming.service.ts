@@ -25,18 +25,22 @@ export class CacheWarmingService {
     this.logger.log('Starting cache warming for trending content...');
 
     try {
-      const [trendingMovies, trendingTv] = await Promise.all([
+      const [trendingMovies1, trendingMovies2, trendingTv1, trendingTv2] = await Promise.all([
         this.tmdbService.getTrending('movie', 1).catch(() => ({ results: [] })),
+        this.tmdbService.getTrending('movie', 2).catch(() => ({ results: [] })),
         this.tmdbService.getTrending('tv', 1).catch(() => ({ results: [] })),
+        this.tmdbService.getTrending('tv', 2).catch(() => ({ results: [] })),
       ]);
 
-      const movieItems = (trendingMovies.results || []).slice(0, 10).map((m: any) => ({
+      const allTrendingMovies = [...(trendingMovies1.results || []), ...(trendingMovies2.results || [])];
+      const movieItems = allTrendingMovies.slice(0, 40).map((m: any) => ({
         id: String(m.id),
         mediaType: 'movie' as const,
         title: m.title,
       }));
 
-      const tvItems = (trendingTv.results || []).slice(0, 10).map((t: any) => ({
+      const allTrendingTv = [...(trendingTv1.results || []), ...(trendingTv2.results || [])];
+      const tvItems = allTrendingTv.slice(0, 40).map((t: any) => ({
         id: String(t.id),
         mediaType: 'tv' as const,
         title: t.name,

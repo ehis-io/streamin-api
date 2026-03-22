@@ -1,5 +1,7 @@
-import { Injectable, Logger, HttpException, HttpStatus } from '@nestjs/common';
+import { Injectable, Logger, HttpException, HttpStatus, Inject } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import type { Cache } from 'cache-manager';
 import axios from 'axios';
 import { Response, Request } from 'express';
 import * as http from 'http';
@@ -11,7 +13,10 @@ const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 1000, keepAliv
 @Injectable()
 export class HlsProxyService {
   private readonly logger = new Logger(HlsProxyService.name);
-  constructor(private configService: ConfigService) { }
+  constructor(
+    private configService: ConfigService,
+    @Inject(CACHE_MANAGER) private cacheManager: Cache
+  ) { }
 
   async proxy(url: string, headersStr: string, req: Request, res: Response) {
     if (!url) {
@@ -19,6 +24,37 @@ export class HlsProxyService {
     }
 
     const apiUrl = this.configService.get('API_URL', 'http://localhost:4001');
+
+    const isM3U8Request = url.includes('.m3u8');
+    const isKeyRequest = url.includes('.key') || url.includes('/key/');
+    const cacheKeyStr = Buffer.from(url).toString('base64');
+    const m3u8CacheKey = `proxy:m3u8:${cacheKeyStr}`;
+    const keyCacheKey = `proxy:key:${cacheKeyStr}`;
+
+    // 🚀 Fast Path: Redis Cache Hit
+    if (isM3U8Request) {
+      const cachedM3U8 = await this.cacheManager.get<string>(m3u8CacheKey);
+      if (cachedM3U8) {
+        this.logger.debug(`[Cache Hit] M3U8 Playlist >> ${url.substring(0, 50)}`);
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+        res.setHeader('content-type', 'application/vnd.apple.mpegurl');
+        res.send(cachedM3U8);
+        return;
+      }
+    }
+
+    if (isKeyRequest) {
+      const cachedKeyBase64 = await this.cacheManager.get<string>(keyCacheKey);
+      if (cachedKeyBase64) {
+        this.logger.debug(`[Cache Hit] AES Key >> ${url.substring(0, 50)}`);
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+        res.setHeader('content-type', 'application/octet-stream');
+        res.send(Buffer.from(cachedKeyBase64, 'base64'));
+        return;
+      }
+    }
 
     // 🧬 Default headers (important for bypassing blocks)
     let headers: Record<string, string> = {
@@ -70,17 +106,20 @@ export class HlsProxyService {
       }
 
       const contentType = (response.headers['content-type'] || '').toLowerCase();
-      const isM3U8 = url.includes('.m3u8') || 
+      const isM3U8 = isM3U8Request || 
                     contentType.includes('mpegurl') || 
                     contentType.includes('application/x-mpegurl');
 
-      // Forward headers (but NOT content-length for M3U8 because it changes)
+      // Forward headers
       res.status(response.status);
       res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-      res.setHeader('Pragma', 'no-cache');
-      res.setHeader('Expires', '0');
       
+      if (isM3U8) {
+         res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+         res.setHeader('Pragma', 'no-cache');
+         res.setHeader('Expires', '0');
+      }
+
       const headersToForward = [
         'content-type', 'content-range', 'accept-ranges', 
         'cache-control', 'etag', 'last-modified', 'expires'
@@ -101,7 +140,6 @@ export class HlsProxyService {
         response.data.on('data', (chunk: Buffer) => { raw += chunk.toString(); });
         response.data.on('end', () => {
           const baseUrl = url.substring(0, url.lastIndexOf('/') + 1);
-          // Simple check if it's actually an M3U8 payload
           if (!raw.startsWith('#EXTM3U') && raw.length < 10) {
              this.logger.warn(`Empty or invalid M3U8 content for ${url}`);
              res.status(500).send('Invalid M3U8 content');
@@ -130,8 +168,20 @@ export class HlsProxyService {
             return `${apiUrl}/api/v1/streams/hls-proxy?url=${encodeURIComponent(targetUrl)}&headers=${encodedHeaders}`;
           }).join('\n');
 
+          // Save to redis (10 minute TTL)
+          this.cacheManager.set(m3u8CacheKey, rewritten, 10 * 60 * 1000).catch(e => this.logger.warn(`Redis M3U8 Cache error: ${e.message}`));
+
           res.setHeader('content-type', 'application/vnd.apple.mpegurl');
           res.send(rewritten);
+        });
+      } else if (isKeyRequest) {
+        const chunks: Buffer[] = [];
+        response.data.on('data', (chunk: Buffer) => chunks.push(chunk));
+        response.data.on('end', () => {
+           const fullBuffer = Buffer.concat(chunks);
+           // Save base64 to redis (60 minute TTL for keys since they are static)
+           this.cacheManager.set(keyCacheKey, fullBuffer.toString('base64'), 60 * 60 * 1000).catch(e => this.logger.warn(`Redis Key Cache error: ${e.message}`));
+           res.send(fullBuffer);
         });
       } else {
         response.data.pipe(res);
