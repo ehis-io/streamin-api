@@ -2,6 +2,11 @@ import { Injectable, Logger, HttpException, HttpStatus } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
 import { Response, Request } from 'express';
+import * as http from 'http';
+import * as https from 'https';
+
+const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 1000, keepAliveMsecs: 15000 });
+const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 1000, keepAliveMsecs: 15000 });
 
 @Injectable()
 export class HlsProxyService {
@@ -49,6 +54,8 @@ export class HlsProxyService {
         responseType: 'stream',
         validateStatus: () => true,
         timeout: 30000,
+        httpAgent,
+        httpsAgent
       });
 
       // 🧱 CORS
@@ -130,7 +137,9 @@ export class HlsProxyService {
         response.data.pipe(res);
       }
     } catch (err: any) {
-      this.logger.error(`Proxy crash for ${url}: ${err.message}`);
+      const code = err.code || 'UNKNOWN_ERROR';
+      const status = err.response?.status ? `HTTP ${err.response.status}` : 'No Response';
+      this.logger.error(`Proxy crash for ${url} | Code: ${code} | Status: ${status} | Msg: ${err.message || String(err)}`);
       throw new HttpException('Proxy failed', HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
