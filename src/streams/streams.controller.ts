@@ -88,7 +88,7 @@ export class StreamsController {
 
     // 2. Flush Redis (removes all stream keys including stale ones)
     try {
-      await (this.cacheManager.store as any).reset?.();
+      await (this.cacheManager.stores as any)[0]?.reset?.();
       this.logger.log('Redis cache flushed.');
     } catch (e: any) {
       this.logger.warn(`Redis flush failed (may not be supported): ${e.message}`);
