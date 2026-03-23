@@ -1,9 +1,14 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
+
 
 @Injectable()
 export class StreamValidationService {
   private readonly logger = new Logger(StreamValidationService.name);
+
+  constructor(private readonly configService: ConfigService) {}
+
 
   private readonly MAX_RETRIES = 3;
   private readonly RETRY_DELAY_MS = 5000;
@@ -16,12 +21,15 @@ export class StreamValidationService {
 
   async validateStream(url: string, priority: number = 0): Promise<boolean> {
     // 🛡️ Skip validation for ALL internal proxy links (hls-proxy or any localhost API URL)
+    const apiUrl = this.configService.get<string>('API_URL');
     if (
       url.includes('/api/v1/streams/hls-proxy') ||
       url.includes('/api/v1/streams/proxy') ||
+      (apiUrl && url.includes(new URL(apiUrl).host)) ||
       url.includes('localhost:4001') ||
       url.includes('127.0.0.1:4001')
     ) {
+
       this.logger.debug(`Skipping validation for internal proxy link: ${url.substring(0, 80)}`);
       return true;
     }

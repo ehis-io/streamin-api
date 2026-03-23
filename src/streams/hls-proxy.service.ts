@@ -23,7 +23,12 @@ export class HlsProxyService {
       throw new HttpException('URL is required', HttpStatus.BAD_REQUEST);
     }
 
-    const apiUrl = this.configService.get('API_URL', 'http://localhost:4001');
+    const apiUrl = this.configService.get<string>('API_URL');
+    if (!apiUrl) {
+      this.logger.error('API_URL is not defined in environment variables');
+      throw new HttpException('Server Configuration Error', HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+
 
     const isM3U8Request = url.includes('.m3u8');
     const isKeyRequest = url.includes('.key') || url.includes('/key/');
@@ -94,9 +99,11 @@ export class HlsProxyService {
         httpsAgent
       });
 
-      // 🧱 CORS
+      // 🧱 CORS (Moved earlier to ensure headers are set even on some failures)
       res.setHeader('Access-Control-Allow-Origin', '*');
-      res.setHeader('Access-Control-Allow-Headers', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Accept,Authorization,Origin');
+
 
       if (response.status >= 400) {
         this.logger.warn(`Proxy fail [${response.status}]: ${url}`);

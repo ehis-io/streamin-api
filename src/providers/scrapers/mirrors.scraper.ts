@@ -46,7 +46,8 @@ export class MirrorsScraper implements Scraper {
         if (reqUrl.includes('.m3u8')) {
           const headers = request.headers();
           const headersBase64 = Buffer.from(JSON.stringify(headers)).toString('base64');
-          const apiUrl = this.configService.get('API_URL', 'http://localhost:4001');
+          const apiUrl = this.configService.get('API_URL');
+
           
           m3u8Links.push({
             url: `${apiUrl}/api/v1/streams/hls-proxy?url=${encodeURIComponent(reqUrl)}&headers=${headersBase64}`,

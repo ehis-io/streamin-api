@@ -98,8 +98,9 @@ export class VidLinkScraper implements Scraper {
             this.logger.debug(`Found VidLink M3U8 early: ${reqUrl}`);
             const headers = request.headers();
             const headersBase64 = Buffer.from(JSON.stringify(headers)).toString('base64');
-            const apiUrl = this.configService.get('API_URL', 'http://localhost:4001');
+            const apiUrl = this.configService.get('API_URL');
             const proxiedUrl = `${apiUrl}/api/v1/streams/hls-proxy?url=${encodeURIComponent(reqUrl)}&headers=${headersBase64}`;
+
 
             m3u8Links.push({
               url: proxiedUrl,

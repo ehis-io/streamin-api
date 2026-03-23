@@ -169,7 +169,8 @@ export class GogoAnimeScraper implements Scraper {
                         const videoUrl = dataVideo.startsWith('//') ? 'https:' + dataVideo : dataVideo;
                         let finalUrl = videoUrl;
                         if (videoUrl.includes('.m3u8')) {
-                            const apiUrl = this.configService.get('API_URL', 'http://localhost:4001');
+                            const apiUrl = this.configService.get('API_URL');
+
                             const proxyHeaders = {
                                 'Referer': this.baseUrl,
                                 'Origin': this.baseUrl
@@ -198,7 +199,8 @@ export class GogoAnimeScraper implements Scraper {
                 if (iframeSrc) {
                     let finalUrl = iframeSrc;
                     if (iframeSrc.includes('.m3u8')) {
-                        const apiUrl = this.configService.get('API_URL', 'http://localhost:4001');
+                        const apiUrl = this.configService.get('API_URL');
+
                         const proxyHeaders = {
                             'Referer': this.baseUrl,
                             'Origin': this.baseUrl
