@@ -44,6 +44,7 @@ jobs:
           REDIS_HOST=${{ secrets.REDIS_HOST }}
           REDIS_PORT=${{ secrets.REDIS_PORT }}
           TMDB_API_KEY=${{ secrets.TMDB_API_KEY }}
+          API_URL=${{ secrets.API_URL }}
 
           EOF
 

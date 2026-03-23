@@ -25,9 +25,7 @@ export class StreamValidationService {
     if (
       url.includes('/api/v1/streams/hls-proxy') ||
       url.includes('/api/v1/streams/proxy') ||
-      (apiUrl && url.includes(new URL(apiUrl).host)) ||
-      url.includes('localhost:4001') ||
-      url.includes('127.0.0.1:4001')
+      (apiUrl && url.includes(new URL(apiUrl).host))
     ) {
 
       this.logger.debug(`Skipping validation for internal proxy link: ${url.substring(0, 80)}`);
