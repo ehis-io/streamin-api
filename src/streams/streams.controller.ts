@@ -1,19 +1,24 @@
-import { Controller, Get, Post, Body, Param, Query, Res, Req, HttpException, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Post, Delete, Body, Param, Query, Res, Req, HttpException, HttpStatus, Inject, Logger } from '@nestjs/common';
 import { Response, Request } from 'express';
-import { spawn } from 'child_process';
-import axios from 'axios';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import type { Cache } from 'cache-manager';
 import { ProvidersService } from '../providers/providers.service';
 import { HlsProxyService } from './hls-proxy.service';
 import { HlsDownloadService } from './hls-download.service';
+import { PrismaService } from '../prisma/prisma.service';
 import { GetStreamsDto } from './dto/get-streams.dto';
 import { PrefetchStreamsDto } from './dto/prefetch-streams.dto';
 
 @Controller('streams')
 export class StreamsController {
+  private readonly logger = new Logger(StreamsController.name);
+
   constructor(
     private readonly providersService: ProvidersService,
     private readonly hlsProxyService: HlsProxyService,
     private readonly hlsDownloadService: HlsDownloadService,
+    private readonly prisma: PrismaService,
+    @Inject(CACHE_MANAGER) private cacheManager: Cache,
   ) { }
 
   @Post('prefetch')
@@ -64,5 +69,35 @@ export class StreamsController {
       query.type,
       query.mediaType
     );
+  }
+
+  /**
+   * Admin endpoint: purge all localhost-cached stream links from DB + Redis.
+   * Call once after deploying to production to clear stale localhost URLs.
+   * DELETE /api/v1/streams/cache/localhost
+   */
+  @Delete('cache/localhost')
+  async purgeLocalhostCache() {
+    this.logger.warn('Admin: Purging all localhost-cached stream links...');
+
+    // 1. Delete from MongoDB
+    const result = await (this.prisma as any).streamedLink.deleteMany({
+      where: { url: { contains: 'localhost' } }
+    });
+    this.logger.log(`Deleted ${result.count} localhost link(s) from DB.`);
+
+    // 2. Flush Redis (removes all stream keys including stale ones)
+    try {
+      await (this.cacheManager.store as any).reset?.();
+      this.logger.log('Redis cache flushed.');
+    } catch (e: any) {
+      this.logger.warn(`Redis flush failed (may not be supported): ${e.message}`);
+    }
+
+    return {
+      success: true,
+      deletedFromDb: result.count,
+      message: 'Stale localhost cache entries purged. Re-deploy and restart the backend if API_URL is not yet updated.',
+    };
   }
 }

@@ -5,9 +5,11 @@ import { ProvidersModule } from '../providers/providers.module';
 import { StreamsGateway } from './streams.gateway';
 import { HlsProxyService } from './hls-proxy.service';
 import { HlsDownloadService } from './hls-download.service';
+import { PrismaModule } from '../prisma/prisma.module';
+import { RedisModule } from '../common/cache/redis.module';
 
 @Module({
-  imports: [ProvidersModule, ConfigModule],
+  imports: [ProvidersModule, ConfigModule, PrismaModule, RedisModule],
   controllers: [StreamsController],
   providers: [StreamsGateway, HlsProxyService, HlsDownloadService],
 })
