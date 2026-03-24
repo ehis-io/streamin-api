@@ -97,13 +97,8 @@ export class HnEmbedScraper implements Scraper {
             this.logger.debug(`Found HnEmbed M3U8 link: ${reqUrl}`);
 
             const headers = request.headers();
-            const headersBase64 = Buffer.from(JSON.stringify(headers)).toString('base64');
-            const apiUrl = getAbsoluteApiUrl(this.configService);
-            const proxiedUrl = `${apiUrl}/api/v1/streams/hls-proxy?url=${encodeURIComponent(reqUrl)}&headers=${headersBase64}`;
-
-
             const streamLink = {
-              url: proxiedUrl,
+              url: reqUrl,
               quality: 'Auto',
               isM3U8: true,
               headers: headers

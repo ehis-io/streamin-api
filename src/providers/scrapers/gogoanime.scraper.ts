@@ -168,20 +168,8 @@ export class GogoAnimeScraper implements Scraper {
 
                     if (dataVideo) {
                         const videoUrl = dataVideo.startsWith('//') ? 'https:' + dataVideo : dataVideo;
-                        let finalUrl = videoUrl;
-                        if (videoUrl.includes('.m3u8')) {
-                            const apiUrl = getAbsoluteApiUrl(this.configService);
-
-                            const proxyHeaders = {
-                                'Referer': this.baseUrl,
-                                'Origin': this.baseUrl
-                            };
-                            const headersBase64 = Buffer.from(JSON.stringify(proxyHeaders)).toString('base64');
-                            finalUrl = `${apiUrl}/api/v1/streams/hls-proxy?url=${encodeURIComponent(videoUrl)}&headers=${headersBase64}`;
-                        }
-
                         streamLinks.push({
-                            url: finalUrl,
+                            url: videoUrl,
                             quality: serverName,
                             isM3U8: videoUrl.includes('.m3u8'),
                             type,
@@ -198,20 +186,8 @@ export class GogoAnimeScraper implements Scraper {
             if (streamLinks.length === 0) {
                 const iframeSrc = $('#player iframe, .player-embed iframe, .video-player iframe').attr('src');
                 if (iframeSrc) {
-                    let finalUrl = iframeSrc;
-                    if (iframeSrc.includes('.m3u8')) {
-                        const apiUrl = getAbsoluteApiUrl(this.configService);
-
-                        const proxyHeaders = {
-                            'Referer': this.baseUrl,
-                            'Origin': this.baseUrl
-                        };
-                        const headersBase64 = Buffer.from(JSON.stringify(proxyHeaders)).toString('base64');
-                        finalUrl = `${apiUrl}/api/v1/streams/hls-proxy?url=${encodeURIComponent(iframeSrc)}&headers=${headersBase64}`;
-                    }
-
                     streamLinks.push({
-                        url: finalUrl,
+                        url: iframeSrc,
                         quality: 'Main Server',
                         isM3U8: iframeSrc.includes('.m3u8'),
                         type,

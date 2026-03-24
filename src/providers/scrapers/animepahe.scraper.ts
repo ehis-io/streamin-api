@@ -118,11 +118,8 @@ export class AnimePaheScraper implements Scraper {
                 const reqUrl = request.url();
                 if (reqUrl.includes('.m3u8')) {
                     const headers = request.headers();
-                    const headersBase64 = Buffer.from(JSON.stringify(headers)).toString('base64');
-                    const apiUrl = getAbsoluteApiUrl(this.configService);
-
                     m3u8Links.push({
-                        url: `${apiUrl}/api/v1/streams/hls-proxy?url=${encodeURIComponent(reqUrl)}&headers=${headersBase64}`,
+                        url: reqUrl,
                         quality: 'Auto (Captured)',
                         isM3U8: true,
                         headers: headers
