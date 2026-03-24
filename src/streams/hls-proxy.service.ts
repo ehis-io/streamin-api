@@ -108,8 +108,13 @@ export class HlsProxyService {
       
       // Fast path for segments: use undici for high-performance streaming
       if (!isM3U8Request && !isKeyRequest) {
+          const undiciHeaders: Record<string, string> = { ...headers };
+          if (req.headers.range) {
+              undiciHeaders['range'] = req.headers.range as string;
+          }
+
           const { statusCode, headers: respHeaders, body } = await request(url, {
-              headers: { ...headers, range: req.headers.range as string },
+              headers: undiciHeaders,
               method: 'GET',
               maxRedirections: 5,
               throwOnError: false,
@@ -140,11 +145,13 @@ export class HlsProxyService {
 
       // 🧬 For M3U8 and Keys, we still use axios for easier Buffer handling or keep it for consistency
       // Actually, let's keep axios for M3U8/Keys since it's already working and they are small
+      const axiosHeaders: Record<string, string> = { ...headers };
+      if (req.headers.range) {
+          axiosHeaders['Range'] = req.headers.range as string;
+      }
+
       const response = await axios.get(url, {
-        headers: {
-          ...headers,
-          Range: req.headers.range || '',
-        },
+        headers: axiosHeaders,
         responseType: 'stream',
         validateStatus: () => true,
         timeout: 20000, // Reduced timeout
