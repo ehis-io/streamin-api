@@ -4,7 +4,6 @@ import { Response, Request } from 'express';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import type { Cache } from 'cache-manager';
 import { ProvidersService } from '../providers/providers.service';
-import { HlsProxyService } from './hls-proxy.service';
 import { HlsDownloadService } from './hls-download.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { GetStreamsDto } from './dto/get-streams.dto';
@@ -16,7 +15,6 @@ export class StreamsController {
 
   constructor(
     private readonly providersService: ProvidersService,
-    private readonly hlsProxyService: HlsProxyService,
     private readonly hlsDownloadService: HlsDownloadService,
     private readonly prisma: PrismaService,
     @Inject(CACHE_MANAGER) private cacheManager: Cache,
