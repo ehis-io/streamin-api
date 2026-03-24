@@ -159,28 +159,9 @@ export class GogoAnimeScraper implements Scraper {
                 }
             });
 
-            // Method 2: Extract from traditional .anime_muti_link structure (fallback)
-            if (streamLinks.length === 0) {
-                $('.anime_muti_link ul li a').each((_, element) => {
-                    const $elem = $(element);
-                    const dataVideo = $elem.attr('data-video');
-                    const serverName = $elem.text()?.replace('Choose this server', '').trim() || 'Unknown Server';
+            // Method 2 removed: We no longer extract bare .m3u8 streams,
+            // only returning the iframes (Method 1 and Method 3) as per the iframe-only revert.
 
-                    if (dataVideo) {
-                        const videoUrl = dataVideo.startsWith('//') ? 'https:' + dataVideo : dataVideo;
-                        streamLinks.push({
-                            url: videoUrl,
-                            quality: serverName,
-                            isM3U8: videoUrl.includes('.m3u8'),
-                            type,
-                            headers: {
-                                'Referer': this.baseUrl,
-                                'Origin': this.baseUrl
-                            }
-                        });
-                    }
-                });
-            }
 
             // Method 3: Extract iframe src directly (last resort)
             if (streamLinks.length === 0) {
