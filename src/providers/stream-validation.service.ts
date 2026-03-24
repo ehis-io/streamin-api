@@ -20,15 +20,10 @@ export class StreamValidationService {
   private readonly coolingDownDomains = new Map<string, number>();
 
   async validateStream(url: string, priority: number = 0): Promise<boolean> {
-    // 🛡️ Skip validation for ALL internal proxy links (hls-proxy or any localhost API URL)
+    // 🛡️ Skip validation for internal API URLs
     const apiUrl = this.configService.get<string>('API_URL');
-    if (
-      url.includes('/api/v1/streams/hls-proxy') ||
-      url.includes('/api/v1/streams/proxy') ||
-      (apiUrl && url.includes(new URL(apiUrl).host))
-    ) {
-
-      this.logger.debug(`Skipping validation for internal proxy link: ${url.substring(0, 80)}`);
+    if (apiUrl && url.includes(new URL(apiUrl).host)) {
+      this.logger.debug(`Skipping validation for internal link: ${url.substring(0, 80)}`);
       return true;
     }
 
