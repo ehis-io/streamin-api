@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Scraper, ScraperSearchResult, StreamLink } from '../scraper.interface';
+import { getAbsoluteApiUrl } from '../../common/utils/config.utils';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 
@@ -117,7 +118,7 @@ export class GogoAnimeScraper implements Scraper {
         try {
             const response = await axios.get(url, {
                 headers: this.headers,
-                timeout: 10000
+                timeout: 30000
             });
 
             const $ = cheerio.load(response.data);
@@ -169,7 +170,7 @@ export class GogoAnimeScraper implements Scraper {
                         const videoUrl = dataVideo.startsWith('//') ? 'https:' + dataVideo : dataVideo;
                         let finalUrl = videoUrl;
                         if (videoUrl.includes('.m3u8')) {
-                            const apiUrl = this.configService.get('API_URL');
+                            const apiUrl = getAbsoluteApiUrl(this.configService);
 
                             const proxyHeaders = {
                                 'Referer': this.baseUrl,
@@ -199,7 +200,7 @@ export class GogoAnimeScraper implements Scraper {
                 if (iframeSrc) {
                     let finalUrl = iframeSrc;
                     if (iframeSrc.includes('.m3u8')) {
-                        const apiUrl = this.configService.get('API_URL');
+                        const apiUrl = getAbsoluteApiUrl(this.configService);
 
                         const proxyHeaders = {
                             'Referer': this.baseUrl,

@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Scraper, ScraperSearchResult, StreamLink } from '../scraper.interface';
 import { PuppeteerService } from '../../puppeteer/puppeteer.service';
+import { getAbsoluteApiUrl } from '../../common/utils/config.utils';
 
 @Injectable()
 export class HnEmbedScraper implements Scraper {
@@ -97,7 +98,7 @@ export class HnEmbedScraper implements Scraper {
 
             const headers = request.headers();
             const headersBase64 = Buffer.from(JSON.stringify(headers)).toString('base64');
-            const apiUrl = this.configService.get('API_URL');
+            const apiUrl = getAbsoluteApiUrl(this.configService);
             const proxiedUrl = `${apiUrl}/api/v1/streams/hls-proxy?url=${encodeURIComponent(reqUrl)}&headers=${headersBase64}`;
 
 

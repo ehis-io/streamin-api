@@ -143,8 +143,8 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
         }
       });
 
-      page.setDefaultNavigationTimeout(30000);
-      page.setDefaultTimeout(30000);
+      page.setDefaultNavigationTimeout(60000);
+      page.setDefaultTimeout(60000);
 
       return { page, context };
     } catch (e) {

@@ -2,6 +2,7 @@ import { Injectable, Logger, HttpException, HttpStatus, Inject } from '@nestjs/c
 import { ConfigService } from '@nestjs/config';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import type { Cache } from 'cache-manager';
+import { request } from 'undici';
 import axios from 'axios';
 import { Response, Request } from 'express';
 import * as http from 'http';
@@ -9,6 +10,11 @@ import * as https from 'https';
 
 const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 1000, keepAliveMsecs: 15000 });
 const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 1000, keepAliveMsecs: 15000 });
+
+import { getAbsoluteApiUrl } from '../common/utils/config.utils';
+
+// Memoize header decoding to save CPU on every segment request
+const headerCache = new Map<string, Record<string, string>>();
 
 @Injectable()
 export class HlsProxyService {
@@ -18,16 +24,16 @@ export class HlsProxyService {
     @Inject(CACHE_MANAGER) private cacheManager: Cache
   ) { }
 
+  public getApiUrl(): string {
+    return getAbsoluteApiUrl(this.configService);
+  }
+
   async proxy(url: string, headersStr: string, req: Request, res: Response) {
     if (!url) {
       throw new HttpException('URL is required', HttpStatus.BAD_REQUEST);
     }
 
-    const apiUrl = this.configService.get<string>('API_URL');
-    if (!apiUrl) {
-      this.logger.error('API_URL is not defined in environment variables');
-      throw new HttpException('Server Configuration Error', HttpStatus.INTERNAL_SERVER_ERROR);
-    }
+    const apiUrl = this.getApiUrl();
 
 
     const isM3U8Request = url.includes('.m3u8');
@@ -61,7 +67,7 @@ export class HlsProxyService {
       }
     }
 
-    // 🧬 Default headers (important for bypassing blocks)
+    // 🧬 Default headers
     let headers: Record<string, string> = {
       'User-Agent':
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
@@ -69,15 +75,27 @@ export class HlsProxyService {
       Origin: new URL(url).origin,
     };
 
-    // 🧠 Decode custom headers
+    // 🧠 Decode custom headers (with memoization)
     if (headersStr) {
-      try {
-        const decoded = Buffer.from(headersStr, 'base64').toString('utf-8');
-        headers = { ...headers, ...JSON.parse(decoded) };
-      } catch {
+      const cached = headerCache.get(headersStr);
+      if (cached) {
+        headers = { ...headers, ...cached };
+      } else {
         try {
-          headers = { ...headers, ...JSON.parse(decodeURIComponent(headersStr)) };
-        } catch {}
+          const decoded = Buffer.from(headersStr, 'base64').toString('utf-8');
+          const parsed = JSON.parse(decoded);
+          headerCache.set(headersStr, parsed);
+          headers = { ...headers, ...parsed };
+          
+          // Basic cache cleanup
+          if (headerCache.size > 1000) headerCache.delete(headerCache.keys().next().value);
+        } catch {
+          try {
+            const parsed = JSON.parse(decodeURIComponent(headersStr));
+            headerCache.set(headersStr, parsed);
+            headers = { ...headers, ...parsed };
+          } catch {}
+        }
       }
     }
 
@@ -87,6 +105,41 @@ export class HlsProxyService {
 
     try {
       this.logger.debug(`Proxying: ${url}`);
+      
+      // Fast path for segments: use undici for high-performance streaming
+      if (!isM3U8Request && !isKeyRequest) {
+          const { statusCode, headers: respHeaders, body } = await request(url, {
+              headers: { ...headers, range: req.headers.range as string },
+              method: 'GET',
+              maxRedirections: 5,
+              throwOnError: false,
+              bodyTimeout: 15000,    // ⚡ Prevent hanging on slow segments
+              headersTimeout: 15000,
+          });
+
+          res.setHeader('Access-Control-Allow-Origin', '*');
+          res.setHeader('Access-Control-Allow-Methods', 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS');
+
+          if (statusCode >= 400) {
+              this.logger.warn(`Proxy fail [${statusCode}]: ${url}`);
+              res.status(statusCode);
+              body.pipe(res);
+              return;
+          }
+
+          // Forward essential headers
+          res.status(statusCode);
+          const headersToForward = ['content-type', 'content-range', 'accept-ranges', 'content-length', 'cache-control'];
+          headersToForward.forEach(h => {
+              if (respHeaders[h]) res.setHeader(h, respHeaders[h] as string);
+          });
+
+          body.pipe(res);
+          return;
+      }
+
+      // 🧬 For M3U8 and Keys, we still use axios for easier Buffer handling or keep it for consistency
+      // Actually, let's keep axios for M3U8/Keys since it's already working and they are small
       const response = await axios.get(url, {
         headers: {
           ...headers,
@@ -94,16 +147,15 @@ export class HlsProxyService {
         },
         responseType: 'stream',
         validateStatus: () => true,
-        timeout: 30000,
+        timeout: 20000, // Reduced timeout
         httpAgent,
         httpsAgent
       });
 
-      // 🧱 CORS (Moved earlier to ensure headers are set even on some failures)
+      // 🧱 CORS
       res.setHeader('Access-Control-Allow-Origin', '*');
       res.setHeader('Access-Control-Allow-Methods', 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS');
       res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Accept,Authorization,Origin');
-
 
       if (response.status >= 400) {
         this.logger.warn(`Proxy fail [${response.status}]: ${url}`);
@@ -119,12 +171,10 @@ export class HlsProxyService {
 
       // Forward headers
       res.status(response.status);
-      res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
       
       if (isM3U8) {
-         res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-         res.setHeader('Pragma', 'no-cache');
-         res.setHeader('Expires', '0');
+         // Allow short-term cache for manifest (30s) to reduce redundant proxy hits
+         res.setHeader('Cache-Control', 'public, max-age=30');
       }
 
       const headersToForward = [
@@ -147,13 +197,14 @@ export class HlsProxyService {
         response.data.on('data', (chunk: Buffer) => { raw += chunk.toString(); });
         response.data.on('end', () => {
           const baseUrl = url.substring(0, url.lastIndexOf('/') + 1);
-          if (!raw.startsWith('#EXTM3U') && raw.length < 10) {
+          const trimmedRaw = raw.trim();
+          if (!trimmedRaw.startsWith('#EXTM3U') && trimmedRaw.length < 10) {
              this.logger.warn(`Empty or invalid M3U8 content for ${url}`);
              res.status(500).send('Invalid M3U8 content');
              return;
           }
 
-          const rewritten = raw.split(/\r?\n/).map(line => {
+          const rewritten = trimmedRaw.split(/\r?\n/).map(line => {
             const trimmed = line.trim();
             if (!trimmed) return line;
 

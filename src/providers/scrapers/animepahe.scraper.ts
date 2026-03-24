@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Scraper, ScraperSearchResult, StreamLink } from '../scraper.interface';
 import { PuppeteerService } from '../../puppeteer/puppeteer.service';
+import { getAbsoluteApiUrl } from '../../common/utils/config.utils';
 
 @Injectable()
 export class AnimePaheScraper implements Scraper {
@@ -22,7 +23,7 @@ export class AnimePaheScraper implements Scraper {
 
             // 2. Click/Find search box and type
             const searchInputSelector = '.input-search';
-            await page.waitForSelector(searchInputSelector, { timeout: 10000 });
+            await page.waitForSelector(searchInputSelector, { timeout: 30000 });
             await page.click(searchInputSelector);
             await page.type(searchInputSelector, query, { delay: 100 });
 
@@ -118,7 +119,7 @@ export class AnimePaheScraper implements Scraper {
                 if (reqUrl.includes('.m3u8')) {
                     const headers = request.headers();
                     const headersBase64 = Buffer.from(JSON.stringify(headers)).toString('base64');
-                    const apiUrl = this.configService.get('API_URL');
+                    const apiUrl = getAbsoluteApiUrl(this.configService);
 
                     m3u8Links.push({
                         url: `${apiUrl}/api/v1/streams/hls-proxy?url=${encodeURIComponent(reqUrl)}&headers=${headersBase64}`,

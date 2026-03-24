@@ -50,7 +50,7 @@ export class TmdbService {
         const response = await axios.get(url, { 
           params: { ...params, api_key: this.apiKey },
           httpsAgent: this.httpsAgent,
-          timeout: 10000 // 10s timeout to prevent hanging the Event Loop for 50s
+          timeout: 30000 // Increased to 30s for better reliability on slower networks
         });
         try {
           await this.cacheManager.set(cacheKey, response.data, ttl);

@@ -63,7 +63,7 @@ export class ProvidersService {
     this.scrapers.sort((a, b) => (b.priority || 0) - (a.priority || 0));
     this.logger.log(`Registered ${this.scrapers.length} scrapers: ${this.scrapers.map(s => s.name).join(', ')}`);
 
-    this.STREAM_TIMEOUT_MS = this.configService.get<number>('STREAM_TIMEOUT_MS', 30000);
+    this.STREAM_TIMEOUT_MS = this.configService.get<number>('STREAM_TIMEOUT_MS', 30000); // Increased to 30s for better stability
 
     axios.defaults.httpAgent = httpAgent;
     axios.defaults.httpsAgent = httpsAgent;
@@ -226,9 +226,15 @@ export class ProvidersService {
     const checkSpeculativeCompletion = () => {
       const m3u8Links = allLinks.filter(l => l.isM3U8);
       
-      // Resolve immediately once at least one HLS link is found
-      if (m3u8Links.length >= 1) {
-        this.logger.debug(`Instant completion: First M3U8 link found, resolving for speed`);
+      // Resolve immediately if we found a high-quality link or multiple options
+      const hasHighQuality = m3u8Links.some(l => 
+          (l.quality || '').toLowerCase().includes('1080') || 
+          (l.quality || '').toLowerCase().includes('auto') ||
+          l.url.includes('master')
+      );
+
+      if (hasHighQuality || m3u8Links.length >= 2) {
+        this.logger.debug(`Speculative completion: quality threshold reached, resolving early`);
         speculativeResolve?.();
         return;
       }
@@ -418,10 +424,10 @@ export class ProvidersService {
       speculativePromise,
       new Promise<void>((resolve) => {
         const interval = setInterval(() => {
-          // Fallback: 7s elapsed with at least 1 M3U8
+          // Fallback: 3s elapsed with at least 1 M3U8
           const m3u8Count = allLinks.filter(l => l.isM3U8).length;
-          if (Date.now() - startTime > 4000 && m3u8Count >= 1) {
-            this.logger.debug(`Time-based speculative completion: ${m3u8Count} M3U8 after 4s`);
+          if (Date.now() - startTime > 3000 && m3u8Count >= 1) {
+            this.logger.debug(`Time-based speculative completion: ${m3u8Count} M3U8 after 3s`);
             clearInterval(interval);
             resolve();
           }
@@ -430,7 +436,7 @@ export class ProvidersService {
             clearInterval(interval);
             resolve();
           }
-        }, 1000);
+        }, 500);
       })
     ]);
 

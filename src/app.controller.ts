@@ -1,9 +1,22 @@
 import { Controller, Get, Query } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { AppService } from './app.service';
 
 @Controller()
 export class AppController {
-  constructor(private readonly appService: AppService) {}
+  constructor(
+    private readonly appService: AppService,
+    private readonly configService: ConfigService,
+  ) { }
+
+  @Get('config-debug')
+  getConfig() {
+    return {
+      PORT: process.env.PORT,
+      API_URL: this.configService.get('API_URL'),
+      NODE_ENV: process.env.NODE_ENV,
+    };
+  }
 
   @Get()
   getHello(): string {

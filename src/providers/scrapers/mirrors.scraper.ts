@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Scraper, ScraperSearchResult, StreamLink } from '../scraper.interface';
+import { getAbsoluteApiUrl } from '../../common/utils/config.utils';
 import { PuppeteerService } from '../../puppeteer/puppeteer.service';
 
 @Injectable()
@@ -46,7 +47,7 @@ export class MirrorsScraper implements Scraper {
         if (reqUrl.includes('.m3u8')) {
           const headers = request.headers();
           const headersBase64 = Buffer.from(JSON.stringify(headers)).toString('base64');
-          const apiUrl = this.configService.get('API_URL');
+          const apiUrl = getAbsoluteApiUrl(this.configService);
 
           
           m3u8Links.push({

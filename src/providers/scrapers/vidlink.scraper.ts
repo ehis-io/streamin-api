@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Scraper, ScraperSearchResult, StreamLink } from '../scraper.interface';
 import { PuppeteerService } from '../../puppeteer/puppeteer.service';
+import { getAbsoluteApiUrl } from '../../common/utils/config.utils';
 
 @Injectable()
 export class VidLinkScraper implements Scraper {
@@ -98,7 +99,7 @@ export class VidLinkScraper implements Scraper {
             this.logger.debug(`Found VidLink M3U8 early: ${reqUrl}`);
             const headers = request.headers();
             const headersBase64 = Buffer.from(JSON.stringify(headers)).toString('base64');
-            const apiUrl = this.configService.get('API_URL');
+            const apiUrl = getAbsoluteApiUrl(this.configService);
             const proxiedUrl = `${apiUrl}/api/v1/streams/hls-proxy?url=${encodeURIComponent(reqUrl)}&headers=${headersBase64}`;
 
 
@@ -139,8 +140,8 @@ export class VidLinkScraper implements Scraper {
           }
 
           // Second polling pass after interaction
-          for (let i = 0; i < 15 && !isResolved && m3u8Links.length === 0; i++) {
-            await new Promise(r => setTimeout(r, 200));
+          for (let i = 0; i < 20 && !isResolved && m3u8Links.length === 0; i++) {
+            await new Promise(r => setTimeout(r, 500));
           }
         } catch (e) {
           this.logger.warn(`VidLink navigation or interaction timed out`);

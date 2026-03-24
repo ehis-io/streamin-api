@@ -80,9 +80,15 @@ export class StreamsController {
   async purgeLocalhostCache() {
     this.logger.warn('Admin: Purging all localhost-cached stream links...');
 
-    // 1. Delete from MongoDB
+    // 1. Delete from MongoDB - Deep purge of all stale patterns
     const result = await (this.prisma as any).streamedLink.deleteMany({
-      where: { url: { contains: 'localhost' } }
+      where: {
+        OR: [
+          { url: { contains: 'localhost' } },
+          { url: { startsWith: '/api' } },
+          { url: { contains: 'api/v1/streams/hls-proxy' } }
+        ]
+      }
     });
     this.logger.log(`Deleted ${result.count} localhost link(s) from DB.`);
 
