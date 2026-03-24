@@ -1,4 +1,5 @@
 import { Controller, Get, Post, Delete, Body, Param, Query, Res, Req, HttpException, HttpStatus, Inject, Logger } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 import { Response, Request } from 'express';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import type { Cache } from 'cache-manager';
