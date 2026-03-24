@@ -11,6 +11,6 @@ import { RedisModule } from '../common/cache/redis.module';
 @Module({
   imports: [ProvidersModule, ConfigModule, PrismaModule, RedisModule],
   controllers: [StreamsController],
-  providers: [StreamsGateway, HlsProxyService, HlsDownloadService],
+  providers: [StreamsGateway, HlsDownloadService],
 })
 export class StreamsModule { }

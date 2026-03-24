@@ -28,26 +28,6 @@ export class StreamsController {
     return { success: true, message: 'Prefetch started' };
   }
 
-  @Get('hls-proxy')
-  async proxy(
-    @Query('url') url: string,
-    @Query('headers') headers: string,
-    @Req() req: Request,
-    @Res() res: Response
-  ) {
-    return this.hlsProxyService.proxy(url, headers, req, res);
-  }
-
-  @Get('proxy') // Legacy support for old cached links
-  async legacyProxy(
-    @Query('url') url: string,
-    @Query('headers') headers: string,
-    @Req() req: Request,
-    @Res() res: Response
-  ) {
-    return this.hlsProxyService.proxy(url, headers, req, res);
-  }
-
   @Get('download')
   async downloadHls(
     @Query('url') url: string,

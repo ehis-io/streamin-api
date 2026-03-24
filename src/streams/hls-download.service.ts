@@ -36,21 +36,8 @@ export class HlsDownloadService {
       }
     }
 
-    // Resolve the actual (un-proxied) m3u8 URL if it went through our hls-proxy
+    // Use direct m3u8 URL
     let resolvedM3u8Url = m3u8Url;
-    if (m3u8Url.includes('/api/v1/streams/hls-proxy')) {
-      try {
-        const parsed = new URL(m3u8Url);
-        resolvedM3u8Url = parsed.searchParams.get('url') || m3u8Url;
-        const encodedH = parsed.searchParams.get('headers');
-        if (encodedH) {
-          try {
-            const decoded = Buffer.from(encodedH, 'base64').toString('utf-8');
-            headers = { ...headers, ...JSON.parse(decoded) };
-          } catch {}
-        }
-      } catch {}
-    }
 
     this.logger.log(`Starting HLS → MP4 download: ${resolvedM3u8Url.substring(0, 80)}...`);
 
