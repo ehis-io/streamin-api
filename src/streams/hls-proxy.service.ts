@@ -63,14 +63,16 @@ export class HlsProxyService {
     });
 
     const raw: string = response.data;
+    // Handle redirects for accurate relative URL resolution
+    const finalUrl = response.request?.res?.responseUrl || m3u8Url;
 
     // Master playlist — rewrite variant URLs to proxy through us
     if (raw.includes('#EXT-X-STREAM-INF')) {
-      return this.cleanMasterPlaylist(raw, m3u8Url, headers);
+      return this.cleanMasterPlaylist(raw, finalUrl, headers);
     }
 
-    // Media playlist — strip ad segments
-    return this.cleanMediaPlaylist(raw, m3u8Url);
+    // Media playlist — strip ad segments and proxy resources
+    return this.cleanMediaPlaylist(raw, finalUrl, headers);
   }
 
   /**
@@ -106,14 +108,9 @@ export class HlsProxyService {
 
   /**
    * Media playlist: identify and remove ad segments.
-   *
-   * Strategy:
-   * - Track SCTE-35 cue regions (#EXT-X-CUE-OUT ... #EXT-X-CUE-IN)
-   * - Track DISCONTINUITY blocks that point to ad URLs
-   * - Remove individual segments whose URLs match ad patterns
-   * - Preserve #EXT-X-MAP, #EXT-X-KEY, and other structural tags
+   * Also recursively proxies all segments and keys to bypass CORS/Referer blocks.
    */
-  private cleanMediaPlaylist(raw: string, baseUrl: string): string {
+  private cleanMediaPlaylist(raw: string, baseUrl: string, headers?: Record<string, string>): string {
     const lines = raw.split(/\r?\n/);
     const cleaned: string[] = [];
     let insideAdBreak = false;
@@ -148,21 +145,34 @@ export class HlsProxyService {
         continue;
       }
 
-      // Resolve relative URLs in tags (KEY, MAP, etc.)
+      // Proxy URIs in tags (KEY, MAP, etc.)
       if (line.startsWith('#EXT-X-KEY') || line.startsWith('#EXT-X-MAP')) {
         line = line.replace(/URI="([^"]+)"/, (_, uri) => {
           try {
-            return `URI="${uri.startsWith('http') ? uri : new URL(uri, baseUrl).toString()}"`;
+            const absoluteUri = uri.startsWith('http') ? uri : new URL(uri, baseUrl).toString();
+            return `URI="${this.buildProxyUrl(absoluteUri, headers)}"`;
           } catch {
             return `URI="${uri}"`;
           }
         });
       }
 
-      // Resolve relative segment URL
+      // Proxy segment URL
       if (!line.startsWith('#') && line.length > 0) {
         try {
-          line = line.startsWith('http') ? line : new URL(line, baseUrl).toString();
+          const absoluteUrl = line.startsWith('http') ? line : new URL(line, baseUrl).toString();
+          
+          // Check for ads BEFORE proxying
+          if (this.isAdSegmentUrl(absoluteUrl)) {
+            // Also remove the preceding #EXTINF tag
+            if (cleaned.length > 0 && cleaned[cleaned.length - 1].startsWith('#EXTINF')) {
+              cleaned.pop();
+            }
+            strippedSegments++;
+            continue;
+          }
+
+          line = this.buildProxyUrl(absoluteUrl, headers);
         } catch {
           // If URL is invalid, keep it as is
         }
@@ -193,18 +203,6 @@ export class HlsProxyService {
         continue;
       }
 
-      // --- Individual segment ad check ---
-      if (!line.startsWith('#') && line.length > 0) {
-        if (this.isAdSegmentUrl(line)) {
-          // Also remove the preceding #EXTINF tag
-          if (cleaned.length > 0 && cleaned[cleaned.length - 1].startsWith('#EXTINF')) {
-            cleaned.pop();
-          }
-          strippedSegments++;
-          continue;
-        }
-      }
-
       cleaned.push(line);
     }
 
@@ -226,8 +224,45 @@ export class HlsProxyService {
     return cleaned.join('\n');
   }
 
+  /**
+   * Directly proxy a resource (segment, key, etc.) and stream it to the client.
+   * Handles arbitrary binary data and passes through Content-Type.
+   */
+  async proxyResource(targetUrl: string, headers: Record<string, string> | undefined, res: any) {
+    try {
+      const reqHeaders: Record<string, string> = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+        ...headers,
+      };
+
+      const response = await axios.get(targetUrl, {
+        headers: reqHeaders,
+        timeout: 15000,
+        responseType: 'stream',
+      });
+
+      // Pass through relevant headers
+      const contentType = response.headers['content-type'];
+      if (contentType) res.setHeader('Content-Type', contentType);
+      
+      const cacheControl = response.headers['cache-control'];
+      if (cacheControl) res.setHeader('Cache-Control', cacheControl);
+      
+      res.setHeader('Access-Control-Allow-Origin', '*');
+
+      response.data.pipe(res);
+    } catch (e: any) {
+      this.logger.error(`Binary proxy failed for ${targetUrl}: ${e.message}`);
+      if (!res.writableEnded) {
+        res.status(502).json({ error: 'Failed to fetch resource' });
+      }
+    }
+  }
+
   private isAdSegmentUrl(url: string): boolean {
     if (!url || url.startsWith('#')) return false;
+    // Note: If the URL is already proxied, we might need to extract the original URL or check both.
+    // However, cleanMediaPlaylist now processes lines sequentially.
     return this.AD_URL_PATTERNS.some(pattern => pattern.test(url));
   }
 }

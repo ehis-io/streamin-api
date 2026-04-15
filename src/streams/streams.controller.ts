@@ -29,8 +29,8 @@ export class StreamsController {
   }
 
   /**
-   * Proxy an M3U8 manifest with ad segments stripped out.
-   * GET /api/v1/streams/hls-proxy?url=<m3u8_url>&headers=<base64_headers>
+   * Proxy an HLS resource (Manifest or Segment).
+   * GET /api/v1/streams/hls-proxy?url=<url>&headers=<base64_headers>
    */
   @Get('hls-proxy')
   async hlsProxy(
@@ -54,14 +54,24 @@ export class StreamsController {
       }
     }
 
+    const isManifest = url.includes('.m3u8') || url.includes('.m3u');
+
     try {
-      const cleaned = await this.hlsProxyService.getCleanManifest(url, headers);
-      res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
-      res.setHeader('Access-Control-Allow-Origin', '*');
-      res.send(cleaned);
+      if (isManifest) {
+        const cleaned = await this.hlsProxyService.getCleanManifest(url, headers);
+        res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Cache-Control', 'no-cache'); // Don't cache manifests as they are dynamic
+        res.send(cleaned);
+      } else {
+        // Proxy binary segment/key
+        await this.hlsProxyService.proxyResource(url, headers, res);
+      }
     } catch (e: any) {
       this.logger.error(`HLS proxy failed for ${url}: ${e.message}`);
-      res.status(502).json({ error: 'Failed to fetch or clean manifest' });
+      if (!res.writableEnded) {
+        res.status(502).json({ error: 'Failed to fetch or clean resource' });
+      }
     }
   }
 
