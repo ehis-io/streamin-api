@@ -1,10 +1,11 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { Cron, CronExpression } from '@nestjs/schedule';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { TmdbService } from '../tmdb/tmdb.service';
 import { ProvidersService } from './providers.service';
 
+const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
+
 @Injectable()
-export class CacheWarmingService {
+export class CacheWarmingService implements OnModuleInit {
   private readonly logger = new Logger(CacheWarmingService.name);
   private isRunning = false;
 
@@ -13,8 +14,12 @@ export class CacheWarmingService {
     private providersService: ProvidersService,
   ) {}
 
-  /** Run every 6 hours — pre-scrape trending movies and TV shows */
-  @Cron(CronExpression.EVERY_6_HOURS)
+  onModuleInit() {
+    // Run once after a 30s startup delay, then every 6 hours
+    setTimeout(() => this.warmTrendingCache(), 30_000);
+    setInterval(() => this.warmTrendingCache(), SIX_HOURS_MS);
+  }
+
   async warmTrendingCache() {
     if (this.isRunning) {
       this.logger.debug('Cache warming already in progress, skipping');

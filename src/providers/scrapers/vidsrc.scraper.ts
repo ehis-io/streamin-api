@@ -14,8 +14,6 @@ export class VidSrcScraper implements Scraper {
     this.baseUrls = urls
       ? urls.split(',').map(u => u.trim())
       : [
-        'https://vidsrc-embed.ru',
-        'https://vidsrc-embed.su',
         'https://vidsrc.me',
         'https://vidsrc.pm',
         'https://vidsrc.xyz',

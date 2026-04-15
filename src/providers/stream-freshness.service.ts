@@ -1,10 +1,11 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { Cron, CronExpression } from '@nestjs/schedule';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { StreamValidationService } from './stream-validation.service';
 
+const TWELVE_HOURS_MS = 12 * 60 * 60 * 1000;
+
 @Injectable()
-export class StreamFreshnessService {
+export class StreamFreshnessService implements OnModuleInit {
   private readonly logger = new Logger(StreamFreshnessService.name);
   private isRunning = false;
 
@@ -17,8 +18,12 @@ export class StreamFreshnessService {
     private validationService: StreamValidationService,
   ) {}
 
-  /** Run every 12 hours — validate aging M3U8 links and purge dead ones */
-  @Cron(CronExpression.EVERY_12_HOURS)
+  onModuleInit() {
+    // Run once after a 2-minute startup delay, then every 12 hours
+    setTimeout(() => this.validateStaleLinks(), 120_000);
+    setInterval(() => this.validateStaleLinks(), TWELVE_HOURS_MS);
+  }
+
   async validateStaleLinks() {
     if (this.isRunning) {
       this.logger.debug('Freshness check already in progress, skipping');

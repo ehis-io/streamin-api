@@ -14,6 +14,7 @@ import { SCRAPER_TOKEN } from './scraper.interface';
 import { CircuitBreakerService } from './circuit-breaker.service';
 import { CacheWarmingService } from './cache-warming.service';
 import { StreamFreshnessService } from './stream-freshness.service';
+import { IframeResolverService } from './iframe-resolver.service';
 
 @Module({
   imports: [TmdbModule, PrismaModule],
@@ -24,6 +25,7 @@ import { StreamFreshnessService } from './stream-freshness.service';
     CircuitBreakerService,
     CacheWarmingService,
     StreamFreshnessService,
+    IframeResolverService,
     VidSrcScraper,
     VidLinkScraper,
     GogoAnimeScraper,

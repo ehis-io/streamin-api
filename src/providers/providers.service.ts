@@ -331,7 +331,7 @@ export class ProvidersService {
             if (mirrorsScraper) {
               const resolvedLinks: StreamLink[] = [];
               for (const link of links) {
-                const isMirror = /streamwish|filemoon|voe\.sx|doodstream|mixdrop|upstream/i.test(link.url);
+                const isMirror = /streamwish|filemoon|voe\.sx|doodstream|mixdrop|upstream|9animetv|gogocdn|embtaku|vidcloud|upcloud|vidsrc|vidlink/i.test(link.url);
                 if (isMirror && !link.isM3U8) {
                   this.logger.debug(`Found mirror link, attempting deep resolution: ${link.url}`);
                   const deepLinks = await mirrorsScraper.getStreamLinks(link.url, streamParams, priority);

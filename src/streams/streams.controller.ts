@@ -5,6 +5,7 @@ import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import type { Cache } from 'cache-manager';
 import { ProvidersService } from '../providers/providers.service';
 import { HlsDownloadService } from './hls-download.service';
+import { HlsProxyService } from './hls-proxy.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { GetStreamsDto } from './dto/get-streams.dto';
 import { PrefetchStreamsDto } from './dto/prefetch-streams.dto';
@@ -16,6 +17,7 @@ export class StreamsController {
   constructor(
     private readonly providersService: ProvidersService,
     private readonly hlsDownloadService: HlsDownloadService,
+    private readonly hlsProxyService: HlsProxyService,
     private readonly prisma: PrismaService,
     @Inject(CACHE_MANAGER) private cacheManager: Cache,
   ) { }
@@ -24,6 +26,43 @@ export class StreamsController {
   async prefetch(@Body() data: PrefetchStreamsDto) {
     this.providersService.prefetchLinks(data.items);
     return { success: true, message: 'Prefetch started' };
+  }
+
+  /**
+   * Proxy an M3U8 manifest with ad segments stripped out.
+   * GET /api/v1/streams/hls-proxy?url=<m3u8_url>&headers=<base64_headers>
+   */
+  @Get('hls-proxy')
+  async hlsProxy(
+    @Query('url') url: string,
+    @Query('headers') headersStr: string,
+    @Res() res: Response,
+  ) {
+    if (!url) {
+      res.status(400).json({ error: 'url query parameter is required' });
+      return;
+    }
+
+    let headers: Record<string, string> | undefined;
+    if (headersStr) {
+      try {
+        headers = JSON.parse(Buffer.from(headersStr, 'base64').toString('utf-8'));
+      } catch {
+        try {
+          headers = JSON.parse(decodeURIComponent(headersStr));
+        } catch {}
+      }
+    }
+
+    try {
+      const cleaned = await this.hlsProxyService.getCleanManifest(url, headers);
+      res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.send(cleaned);
+    } catch (e: any) {
+      this.logger.error(`HLS proxy failed for ${url}: ${e.message}`);
+      res.status(502).json({ error: 'Failed to fetch or clean manifest' });
+    }
   }
 
   @Get('download')

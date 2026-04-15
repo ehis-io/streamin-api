@@ -29,14 +29,9 @@ export class StreamValidationService {
 
     const domain = new URL(url).hostname;
 
-    // Auto-accept well-known CDN M3U8 patterns — these are always valid if intercepted
-    if (url.includes('.m3u8') && (
-      domain.includes('akamaized.net') ||
-      domain.includes('cloudfront.net') ||
-      domain.includes('.hls.') ||
-      domain.includes('fastly.net')
-    )) {
-      this.logger.debug(`Auto-accepting CDN M3U8 link: ${url.substring(0, 80)}`);
+    // Auto-accept M3U8 patterns — these are assumed valid since they were actively extracted
+    if (url.includes('.m3u8') || url.includes('.m3u')) {
+      this.logger.debug(`Auto-accepting M3U8 link: ${url.substring(0, 80)}`);
       return true;
     }
 
