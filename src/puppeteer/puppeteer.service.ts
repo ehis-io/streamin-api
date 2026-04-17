@@ -155,17 +155,19 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
 
   async withPage<T>(fn: (page: Page) => Promise<T>, priority: number = 0): Promise<T> {
     let pageObj: { page: Page; context: any } | null = null;
+    const reservedSlots = 2; // Always keep 2 slots for priority 0 requests
+    const capacityLimit = priority <= 0 ? this.maxPages : Math.max(1, this.maxPages - reservedSlots);
 
-    if (this.pagePool.length > 0) {
+    if (this.pagePool.length > 0 && this.activePages < capacityLimit) {
       pageObj = this.pagePool.shift()!;
       this.activePages++;
-    } else if (this.activePages < this.maxPages) {
+    } else if (this.activePages < capacityLimit) {
       this.activePages++;
       pageObj = await this.createNewPage();
     }
 
     if (!pageObj) {
-      this.logger.debug(`No pages available. Queuing request with priority ${priority}...`);
+      this.logger.debug(`Capacity reached (${this.activePages}/${this.maxPages}, limit: ${capacityLimit}). Queuing request with priority ${priority}...`);
       pageObj = await new Promise<{ page: Page; context: any }>((resolve, reject) => {
         this.queue.push({ priority, resolve, reject });
         this.queue.sort((a, b) => a.priority - b.priority);
@@ -216,7 +218,13 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
   }
 
   private processQueue() {
-    if (this.queue.length > 0 && (this.pagePool.length > 0 || this.activePages < this.maxPages)) {
+    if (this.queue.length === 0) return;
+
+    const next = this.queue[0];
+    const reservedSlots = 2;
+    const capacityLimit = next.priority <= 0 ? this.maxPages : Math.max(1, this.maxPages - reservedSlots);
+
+    if (this.activePages < capacityLimit && (this.pagePool.length > 0 || this.activePages < this.maxPages)) {
       const { resolve, reject } = this.queue.shift()!;
 
       let pageObj: { page: Page; context: any } | null = null;
@@ -227,18 +235,16 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
       if (pageObj) {
         resolve(pageObj);
       } else {
-        // If no pooled page but we have capacity, it will be handled by the next tick of withPage's queue processing
-        // Actually, we should create it here if we have capacity
         this.createNewPage().then(p => {
           if (p) {
-              resolve(p);
+            resolve(p);
           } else {
-              this.activePages--; // Need to decrement since allocating a slot failed
-              reject(new Error("Puppeteer connection timeout: could not allocate a new browser page."));
+            this.activePages--;
+            reject(new Error("Puppeteer connection timeout: could not allocate a new browser page."));
           }
         }).catch(err => {
-            this.activePages--;
-            reject(err);
+          this.activePages--;
+          reject(err);
         });
       }
     }

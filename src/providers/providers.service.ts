@@ -46,8 +46,10 @@ export class ProvidersService {
   private readonly logger = new Logger(ProvidersService.name);
   private readonly STREAM_TIMEOUT_MS: number;
 
-  private readonly inFlightRequests = new Map<string, Promise<StreamResult>>();
+  private readonly inFlightRequests = new Map<string, { promise: Promise<StreamResult>, priority: number }>();
   private readonly activePrefetches = new Set<string>();
+  private globalPrefetchCount = 0;
+  private readonly MAX_GLOBAL_PREFETCH = 3; // Total background tasks allowed across all requests
 
   constructor(
     @Inject(SCRAPER_TOKEN) private scrapers: Scraper[],
@@ -141,27 +143,35 @@ export class ProvidersService {
     const requestKey = `${activeMediaType}:${activeMediaType === 'anime' ? malId : tmdbId}:s${dbSeason}:e${dbEpisode}:${type}`;
 
     // Deduplication: join in-flight request
-    if (this.inFlightRequests.has(requestKey)) {
-      this.logger.debug(`[Deduplication] Joining in-flight request for ${requestKey}`);
-      const inFlight = await this.inFlightRequests.get(requestKey)!;
-      if (onLinkFound) {
-        inFlight.links.forEach(link => onLinkFound(link));
+    const inFlight = this.inFlightRequests.get(requestKey);
+    if (inFlight) {
+      if (priority < inFlight.priority) {
+        this.logger.debug(`[Priority Boost] Upgrading ${requestKey} from ${inFlight.priority} to ${priority}`);
+        inFlight.priority = priority;
       }
-      return inFlight;
+      this.logger.debug(`[Deduplication] Joining in-flight request for ${requestKey}`);
+      const result = await inFlight.promise;
+      if (onLinkFound) {
+        result.links.forEach((link: any) => onLinkFound(link));
+      }
+      return result;
     }
 
     const fetchPromise = (async () => {
       try {
+        // Use a dynamic priority getter so logic within can see upgrades
+        const getCurrentPriority = () => this.inFlightRequests.get(requestKey)?.priority ?? priority;
+        
         return await this.performFindStreamLinks(
           id, numericId, title, tmdbId, malId, imdbId, activeMediaType,
-          dbSeason, dbEpisode, type, onLinkFound, priority
+          dbSeason, dbEpisode, type, onLinkFound, getCurrentPriority
         );
       } finally {
         this.inFlightRequests.delete(requestKey);
       }
     })();
 
-    this.inFlightRequests.set(requestKey, fetchPromise);
+    this.inFlightRequests.set(requestKey, { promise: fetchPromise, priority });
     return fetchPromise;
   }
 
@@ -177,8 +187,9 @@ export class ProvidersService {
     dbEpisode: number | null,
     type: 'sub' | 'dub',
     onLinkFound?: (link: StreamLink) => void,
-    priority: number = 0
+    priority: number | (() => number) = 0
   ): Promise<StreamResult> {
+    const getPriority = () => typeof priority === 'function' ? priority() : priority;
     const season = dbSeason;
     const episode = dbEpisode;
 
@@ -288,7 +299,7 @@ export class ProvidersService {
             : title;
 
           this.logger.debug(`Searching for ${scraper.name} using query: "${searchQuery}"`);
-          searchResults = await scraper.search(searchQuery, tmdbId, imdbId, malId, priority, activeMediaType);
+          searchResults = await scraper.search(searchQuery, tmdbId, imdbId, malId, getPriority(), activeMediaType);
 
           if (searchResults.length > 0) {
             const bestResult = searchResults[0];
@@ -324,7 +335,7 @@ export class ProvidersService {
               ? { season: season || 1, episode: episode || 1, type }
               : undefined;
 
-            let links = await scraper.getStreamLinks(result.url, streamParams, priority);
+            let links = await scraper.getStreamLinks(result.url, streamParams, getPriority());
 
             // 🛡️ RECURSIVE RESOLUTION: If any link is a known mirror, resolve it to M3U8
             const mirrorsScraper = this.scrapers.find(s => s.name === 'MirrorResolver');
@@ -334,7 +345,7 @@ export class ProvidersService {
                 const isMirror = /streamwish|filemoon|voe\.sx|doodstream|mixdrop|upstream|9animetv|gogocdn|embtaku|vidcloud|upcloud|vidsrc|vidlink/i.test(link.url);
                 if (isMirror && !link.isM3U8) {
                   this.logger.debug(`Found mirror link, attempting deep resolution: ${link.url}`);
-                  const deepLinks = await mirrorsScraper.getStreamLinks(link.url, streamParams, priority);
+                  const deepLinks = await mirrorsScraper.getStreamLinks(link.url, streamParams, getPriority());
                   if (deepLinks.length > 0) {
                     resolvedLinks.push(...deepLinks);
                   } else {
@@ -356,7 +367,7 @@ export class ProvidersService {
             await Promise.all(taggedLinks.map(async (link) => {
               if (isTimedOut) return;
               try {
-                const isValid = await this.validationService.validateStream(link.url, priority);
+                const isValid = await this.validationService.validateStream(link.url, getPriority());
                 if (isValid) {
                   await this.cacheService.saveToDatabase(link, activeMediaType!, tmdbId, malId, dbSeason, dbEpisode, type);
                   validLinks.push(link);
@@ -452,10 +463,15 @@ export class ProvidersService {
     this.logger.log(`Queueing prefetch for ${items.length} items`);
 
     const queue = [...items];
-    const concurrentLimit = 3;
 
     const processQueue = async () => {
       while (queue.length > 0) {
+        if (this.globalPrefetchCount >= this.MAX_GLOBAL_PREFETCH) {
+          this.logger.debug(`[Prefetch Guard] Global limit reached (${this.globalPrefetchCount}/${this.MAX_GLOBAL_PREFETCH}). Waiting...`);
+          await new Promise(resolve => setTimeout(resolve, 5000));
+          continue;
+        }
+
         const item = queue.shift();
         if (!item) break;
 
@@ -470,7 +486,8 @@ export class ProvidersService {
 
         try {
           this.activePrefetches.add(prefetchKey);
-          this.logger.debug(`Proactively resolving streams for ${item.id} (${item.mediaType})`);
+          this.globalPrefetchCount++;
+          this.logger.debug(`Proactively resolving streams for ${item.id} (${item.mediaType}) [Global Count: ${this.globalPrefetchCount}]`);
           await this.findStreamLinks(
             item.id,
             dbSeason || undefined,
@@ -484,13 +501,16 @@ export class ProvidersService {
           this.logger.debug(`Background prefetch failed for ${item.id}: ${err.message}`);
         } finally {
           this.activePrefetches.delete(prefetchKey);
+          this.globalPrefetchCount--;
         }
 
         await new Promise(resolve => setTimeout(resolve, 2000));
       }
     };
 
-    for (let i = 0; i < Math.min(concurrentLimit, items.length); i++) {
+    // Only start as many loops as we have items, capped at a reasonable local concurrency
+    const localConcurrent = Math.min(3, items.length);
+    for (let i = 0; i < localConcurrent; i++) {
       processQueue();
     }
   }
