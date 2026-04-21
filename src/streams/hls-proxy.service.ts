@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, HttpException, HttpStatus } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios from 'axios';
 
@@ -248,14 +248,13 @@ export class HlsProxyService {
       const cacheControl = response.headers['cache-control'];
       if (cacheControl) res.setHeader('Cache-Control', cacheControl);
       
-      res.setHeader('Access-Control-Allow-Origin', '*');
-
       response.data.pipe(res);
     } catch (e: any) {
       this.logger.error(`Binary proxy failed for ${targetUrl}: ${e.message}`);
-      if (!res.writableEnded) {
-        res.status(502).json({ error: 'Failed to fetch resource' });
-      }
+      throw new HttpException(
+        `Failed to fetch resource: ${e.message}`,
+        e.response?.status || HttpStatus.BAD_GATEWAY
+      );
     }
   }
 

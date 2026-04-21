@@ -27,9 +27,15 @@ export class HttpExceptionFilter implements ExceptionFilter {
         };
 
         // 🧱 CORS for error responses
-        response.setHeader('Access-Control-Allow-Origin', '*');
+        const origin = request.headers.origin;
+        if (origin) {
+            response.setHeader('Access-Control-Allow-Origin', origin as string);
+            response.setHeader('Access-Control-Allow-Credentials', 'true');
+        } else {
+            response.setHeader('Access-Control-Allow-Origin', '*');
+        }
         response.setHeader('Access-Control-Allow-Methods', 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS');
-        response.setHeader('Access-Control-Allow-Headers', 'Content-Type,Accept,Authorization,Origin');
+        response.setHeader('Access-Control-Allow-Headers', 'Content-Type,Accept,Authorization,Origin,Range,Referer');
 
         response.status(status).json(errorResponse);
 

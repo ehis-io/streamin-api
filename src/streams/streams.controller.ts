@@ -61,7 +61,6 @@ export class StreamsController {
       if (isManifest) {
         const cleaned = await this.hlsProxyService.getCleanManifest(url, headers);
         res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
-        res.setHeader('Access-Control-Allow-Origin', '*');
         res.setHeader('Cache-Control', 'no-cache'); // Don't cache manifests as they are dynamic
         res.send(cleaned);
       } else {
@@ -70,9 +69,11 @@ export class StreamsController {
       }
     } catch (e: any) {
       this.logger.error(`HLS proxy failed for ${url}: ${e.message}`);
-      if (!res.writableEnded) {
-        res.status(502).json({ error: 'Failed to fetch or clean resource' });
-      }
+      if (e instanceof HttpException) throw e;
+      throw new HttpException(
+        `HLS proxy failed: ${e.message}`,
+        HttpStatus.BAD_GATEWAY,
+      );
     }
   }
 
