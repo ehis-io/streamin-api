@@ -32,6 +32,7 @@ export class StreamsController {
    * Proxy an HLS resource (Manifest or Segment).
    * GET /api/v1/streams/hls-proxy?url=<url>&headers=<base64_headers>
    */
+  @SkipThrottle()
   @Get('hls-proxy')
   async hlsProxy(
     @Query('url') url: string,

@@ -22,7 +22,7 @@ import { PuppeteerModule } from './puppeteer/puppeteer.module';
     ConfigModule.forRoot({ isGlobal: true }),
     ThrottlerModule.forRoot([{
       ttl: 60000,
-      limit: 30,
+      limit: 300,
     }]),
     RedisModule,
     TmdbModule,
