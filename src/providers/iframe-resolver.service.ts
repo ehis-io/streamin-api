@@ -66,6 +66,7 @@ export class IframeResolverService {
               url: reqUrl,
               quality: reqUrlLower.includes('master') || reqUrlLower.includes('index.m3u8') ? 'Auto' : 'Unknown',
               isM3U8: true,
+              originalUrl: embedUrl,
               headers: request.headers(),
             });
             this.logger.debug(`Captured M3U8: ${reqUrl.substring(0, 100)}`);
@@ -122,6 +123,7 @@ export class IframeResolverService {
               url,
               quality: 'Direct',
               isM3U8: false,
+              originalUrl: embedUrl,
               headers: { 'Referer': embedUrl },
             });
             this.logger.debug(`Captured MP4: ${url.substring(0, 100)}`);
@@ -257,6 +259,7 @@ export class IframeResolverService {
         url: s.url,
         quality: 'Auto',
         isM3U8: s.type === 'm3u8',
+        originalUrl: referer,
         headers: { 'Referer': referer },
       }));
     } catch {
@@ -280,6 +283,7 @@ export class IframeResolverService {
             url: src,
             quality: 'Embed',
             isM3U8: false,
+            originalUrl: referer,
             headers: { 'Referer': referer },
           });
         }

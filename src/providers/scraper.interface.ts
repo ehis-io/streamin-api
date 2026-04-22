@@ -4,6 +4,7 @@ export interface StreamLink {
   quality?: string; // e.g. "1080p", "720p"
   isM3U8?: boolean;
   provider?: string;
+  originalUrl?: string; // The original embed URL before extraction
   headers?: Record<string, string>; // Referer, User-Agent etc.
   type?: 'sub' | 'dub'; // Indicates if the stream is subbed or dubbed
 }
