@@ -362,7 +362,7 @@ export class ProvidersService {
               const isMirror = /streamwish|filemoon|voe\.sx|doodstream|mixdrop|upstream|9animetv|gogocdn|embtaku|vidcloud|upcloud|vidsrc|vidlink/i.test(initialLink.url);
               let resolvedLinks: (StreamLink & { provider: string })[] = [];
 
-              if (isMirror && !initialLink.isM3U8 && mirrorsScraper) {
+              if (isMirror && !initialLink.isM3U8 && mirrorsScraper && activeMediaType !== 'anime') {
                 this.logger.debug(`Deep-resolving mirror: ${initialLink.url}`);
                 const deepLinks = await mirrorsScraper.getStreamLinks(initialLink.url, streamParams, getPriority());
                 const targetLinks = deepLinks.length > 0 ? deepLinks : [initialLink];
