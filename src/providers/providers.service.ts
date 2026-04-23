@@ -504,10 +504,7 @@ export class ProvidersService {
       }
     };
 
-    // Only start as many loops as we have items, capped at a reasonable local concurrency
-    const localConcurrent = Math.min(3, items.length);
-    for (let i = 0; i < localConcurrent; i++) {
-      processQueue();
-    }
+    // Process prefetch queue serially — user requests always get priority via reserved Puppeteer slots
+    processQueue();
   }
 }
