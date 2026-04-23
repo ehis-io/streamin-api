@@ -14,6 +14,21 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   app.useGlobalPipes(new ValidationPipe({ transform: true }));
   app.useGlobalFilters(new HttpExceptionFilter());
+
+  // ☢️ DOUBLE NUCLEAR: Force CORS headers for hls-proxy before NestJS logic
+  app.use((req: any, res: any, next: any) => {
+    if (req.url.includes('hls-proxy')) {
+      res.header('Access-Control-Allow-Origin', '*');
+      res.header('Access-Control-Allow-Methods', 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS');
+      res.header('Access-Control-Allow-Headers', '*');
+      res.header('Access-Control-Expose-Headers', '*');
+      if (req.method === 'OPTIONS') {
+        return res.sendStatus(200);
+      }
+    }
+    next();
+  });
+
   app.enableCors({
     origin: [
       'https://www.filmstreamer.org',
