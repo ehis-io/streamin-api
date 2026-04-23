@@ -107,7 +107,8 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
       this.browser = await (puppeteer as any).launch({
         headless: true,
         args: launchArgs,
-        protocolTimeout: 240000,
+        protocolTimeout: 300000, // 5 minutes
+        timeout: 60000, // 1 minute launch timeout
       }) as Browser;
       this.logger.log('Puppeteer browser launched successfully');
     } catch (error) {
