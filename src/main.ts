@@ -15,19 +15,6 @@ async function bootstrap() {
   app.useGlobalPipes(new ValidationPipe({ transform: true }));
   app.useGlobalFilters(new HttpExceptionFilter());
 
-  app.enableCors({
-    origin: [
-      'https://www.filmstreamer.org',
-      'https://filmstreamer.org',
-      'http://localhost:3000',
-      'http://localhost:3001',
-    ],
-    credentials: true,
-    methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
-    allowedHeaders: ['Content-Type', 'Authorization', 'Origin', 'Accept', 'Range', 'Referer', 'X-Requested-With', 'X-Playback-Session-Id'],
-    exposedHeaders: ['Content-Range', 'Content-Length', 'Accept-Ranges'],
-  });
-
   app.setGlobalPrefix('api/v1');
 
   // Swagger Setup
