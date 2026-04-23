@@ -64,25 +64,6 @@ export class StreamsController {
         res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
         res.setHeader('Cache-Control', 'no-cache'); // Don't cache manifests as they are dynamic
 
-        // 🧱 Secure CORS for manifests
-        const allowedOrigins = [
-          'https://www.filmstreamer.org',
-          'https://filmstreamer.org',
-          'http://localhost:3000',
-          'http://localhost:3001',
-        ];
-        const origin = req.headers.origin as string;
-        const referer = req.headers.referer ? new URL(req.headers.referer).origin : null;
-        
-        const finalOrigin = allowedOrigins.includes(origin) ? origin : 
-                            (allowedOrigins.includes(referer!) ? referer : allowedOrigins[0]);
-        
-        res.setHeader('Access-Control-Allow-Origin', finalOrigin!);
-        res.setHeader('Access-Control-Allow-Credentials', 'true');
-        res.setHeader('Access-Control-Allow-Methods', 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS');
-        res.setHeader('Access-Control-Allow-Headers', '*');
-        res.setHeader('Access-Control-Expose-Headers', '*');
-
         res.send(cleaned);
       } else {
         // Proxy binary segment/key

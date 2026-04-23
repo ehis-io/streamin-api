@@ -247,27 +247,6 @@ export class HlsProxyService {
       
       const cacheControl = response.headers['cache-control'];
       if (cacheControl) res.setHeader('Cache-Control', cacheControl);
-
-      // 🧱 Secure CORS for proxied resources (HLS segments/keys)
-      const allowedOrigins = [
-        'https://www.filmstreamer.org',
-        'https://filmstreamer.org',
-        'http://localhost:3000',
-        'http://localhost:3001',
-      ];
-      const originHeader = res.req?.headers?.origin as string;
-      const refererHeader = res.req?.headers?.referer as string;
-      let refererOrigin: string | null = null;
-      try { if (refererHeader) refererOrigin = new URL(refererHeader).origin; } catch (e) {}
-
-      const finalOrigin = allowedOrigins.includes(originHeader) ? originHeader : 
-                          (allowedOrigins.includes(refererOrigin!) ? refererOrigin : allowedOrigins[0]);
-
-      res.setHeader('Access-Control-Allow-Origin', finalOrigin!);
-      res.setHeader('Access-Control-Allow-Credentials', 'true');
-      res.setHeader('Access-Control-Allow-Methods', 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', '*');
-      res.setHeader('Access-Control-Expose-Headers', '*');
       
       response.data.pipe(res);
     } catch (e: any) {
