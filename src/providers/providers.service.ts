@@ -102,12 +102,17 @@ export class ProvidersService {
       activeMediaType = (season && episode) ? 'tv' : 'movie';
     }
 
+    const dbSeason = (activeMediaType === 'tv' || activeMediaType === 'anime') ? (season || 1) : null;
+    const dbEpisode = (activeMediaType === 'tv' || activeMediaType === 'anime') ? (episode || 1) : null;
+
+    const requestKey = `${activeMediaType}:${numericId}:s${dbSeason}:e${dbEpisode}:${type}`;
+
     let title = '';
     let tmdbId: number | undefined;
     let malId: number | undefined;
     let imdbId: string | undefined;
-
     let details: any;
+
     try {
       if (activeMediaType === 'anime') {
         malId = numericId;
@@ -115,17 +120,32 @@ export class ProvidersService {
         details = (animeResponse as any).data;
         title = details.title;
 
-        try {
-          const searchRes = await this.tmdbService.search(title, 'tv');
-          if (searchRes.results && searchRes.results.length > 0) {
-            tmdbId = searchRes.results[0].id;
-            this.logger.log(`Mapped Anime "${title}" (MAL: ${malId}) to TMDB ID: ${tmdbId}`);
-          } else {
-            this.logger.warn(`Could not find TMDB match for Anime "${title}"`);
+        // Start TMDB mapping in parallel with scraping
+        const tmdbMappingPromise = this.tmdbService.search(title, 'tv')
+          .then(searchRes => {
+            if (searchRes.results && searchRes.results.length > 0) {
+              tmdbId = searchRes.results[0].id;
+              this.logger.log(`Mapped Anime "${title}" (MAL: ${malId}) to TMDB ID: ${tmdbId}`);
+            }
+          })
+          .catch(err => this.logger.warn(`TMDB mapping failed: ${err.message}`));
+
+        const getCurrentPriority = () => this.inFlightRequests.get(requestKey)?.priority ?? priority;
+        const fetchPromise = (async () => {
+          try {
+            return await this.performFindStreamLinks(
+              id, numericId, title, tmdbId, malId, imdbId, activeMediaType,
+              dbSeason, dbEpisode, type, onLinkFound, getCurrentPriority,
+              tmdbMappingPromise
+            );
+          } finally {
+            this.inFlightRequests.delete(requestKey);
           }
-        } catch (searchError: any) {
-          this.logger.warn(`TMDB search failed for Anime mapping: ${searchError.message}`);
-        }
+        })();
+
+        this.inFlightRequests.set(requestKey, { promise: fetchPromise, priority });
+        return fetchPromise;
+
       } else {
         tmdbId = numericId;
         details = await this.tmdbService.getDetails(tmdbId, activeMediaType as 'movie' | 'tv');
@@ -137,10 +157,6 @@ export class ProvidersService {
       return { links: [], scraperStatuses: [] };
     }
 
-    const dbSeason = (activeMediaType === 'tv' || activeMediaType === 'anime') ? (season || 1) : null;
-    const dbEpisode = (activeMediaType === 'tv' || activeMediaType === 'anime') ? (episode || 1) : null;
-
-    const requestKey = `${activeMediaType}:${activeMediaType === 'anime' ? malId : tmdbId}:s${dbSeason}:e${dbEpisode}:${type}`;
 
     // Deduplication: join in-flight request
     const inFlight = this.inFlightRequests.get(requestKey);
@@ -187,7 +203,8 @@ export class ProvidersService {
     dbEpisode: number | null,
     type: 'sub' | 'dub',
     onLinkFound?: (link: StreamLink) => void,
-    priority: number | (() => number) = 0
+    priority: number | (() => number) = 0,
+    tmdbMappingPromise?: Promise<void>
   ): Promise<StreamResult> {
     const getPriority = () => typeof priority === 'function' ? priority() : priority;
     const season = dbSeason;
@@ -299,6 +316,13 @@ export class ProvidersService {
             : title;
 
           this.logger.debug(`Searching for ${scraper.name} using query: "${searchQuery}"`);
+          
+          // If this scraper needs TMDB ID and it's not yet available, wait for the mapping promise
+          if (!tmdbId && tmdbMappingPromise && (scraper.name === 'VidSrc' || scraper.name === 'VidLink')) {
+            this.logger.debug(`Waiting for TMDB mapping for ${scraper.name}...`);
+            await tmdbMappingPromise;
+          }
+
           searchResults = await scraper.search(searchQuery, tmdbId, imdbId, malId, getPriority(), activeMediaType);
 
           if (searchResults.length > 0) {
@@ -335,48 +359,53 @@ export class ProvidersService {
               ? { season: season || 1, episode: episode || 1, type }
               : undefined;
 
-            let links = await scraper.getStreamLinks(result.url, streamParams, getPriority());
+            const links = await scraper.getStreamLinks(result.url, streamParams, getPriority());
 
-            // 🛡️ RECURSIVE RESOLUTION: Resolve all mirror links in parallel
+            // 🛡️ RECURSIVE RESOLUTION + VALIDATION PIPELINE
+            // Instead of waiting for ALL mirrors to resolve, we process each link independently.
+            // This allows speculative completion to trigger as soon as the first mirror finishes.
             const mirrorsScraper = this.scrapers.find(s => s.name === 'MirrorResolver');
-            if (mirrorsScraper) {
-              const resolvedGroups = await Promise.all(
-                links.map(async (link) => {
-                  const isMirror = /streamwish|filemoon|voe\.sx|doodstream|mixdrop|upstream|9animetv|gogocdn|embtaku|vidcloud|upcloud|vidsrc|vidlink/i.test(link.url);
-                  if (isMirror && !link.isM3U8) {
-                    this.logger.debug(`Found mirror link, attempting deep resolution: ${link.url}`);
-                    const deepLinks = await mirrorsScraper.getStreamLinks(link.url, streamParams, getPriority());
-                    return deepLinks.length > 0 ? deepLinks : [link];
-                  }
-                  return [link];
-                })
-              );
-              links = resolvedGroups.flat();
-            }
 
-            const taggedLinks = links.map(l => ({
-              ...l,
-              provider: result.title.includes('(') ? result.title : `${scraper.name} (${new URL(result.url).hostname})`
-            }) as (StreamLink & { provider: string }));
-
-            // Validate each link immediately as it comes in (pipelined)
-            await Promise.all(taggedLinks.map(async (link) => {
+            await Promise.all(links.map(async (initialLink) => {
               if (isTimedOut) return;
-              try {
-                const isValid = await this.validationService.validateStream(link.url, getPriority());
-                if (isValid) {
-                  await this.cacheService.saveToDatabase(link, activeMediaType!, tmdbId, malId, dbSeason, dbEpisode, type);
-                  validLinks.push(link);
-                  allLinks.push(link);
-                  this.logger.log(`Valid link found (${link.isM3U8 ? 'HLS' : 'Direct'}): ${link.url.substring(0, 100)}...`);
-                  if (onLinkFound) onLinkFound(link);
-                  checkSpeculativeCompletion();
-                } else {
-                  this.logger.warn(`REJECTED by validation: ${link.url.substring(0, 100)}...`);
-                }
-              } catch (valError: any) {
-                this.logger.error(`Validation crashed for ${link.url}: ${valError.message}`);
+
+              const isMirror = /streamwish|filemoon|voe\.sx|doodstream|mixdrop|upstream|9animetv|gogocdn|embtaku|vidcloud|upcloud|vidsrc|vidlink/i.test(initialLink.url);
+              let resolvedLinks: (StreamLink & { provider: string })[] = [];
+
+              if (isMirror && !initialLink.isM3U8 && mirrorsScraper) {
+                this.logger.debug(`Deep-resolving mirror: ${initialLink.url}`);
+                const deepLinks = await mirrorsScraper.getStreamLinks(initialLink.url, streamParams, getPriority());
+                const targetLinks = deepLinks.length > 0 ? deepLinks : [initialLink];
+                resolvedLinks = targetLinks.map(l => ({
+                  ...l,
+                  provider: result.title.includes('(') ? result.title : `${scraper.name} (${new URL(result.url).hostname})`
+                }));
+              } else {
+                resolvedLinks = [{
+                  ...initialLink,
+                  provider: result.title.includes('(') ? result.title : `${scraper.name} (${new URL(result.url).hostname})`
+                }];
               }
+
+              // Validate each resolved link immediately (pipelined)
+              await Promise.all(resolvedLinks.map(async (link) => {
+                if (isTimedOut) return;
+                try {
+                  const isValid = await this.validationService.validateStream(link.url, getPriority());
+                  if (isValid) {
+                    await this.cacheService.saveToDatabase(link, activeMediaType!, tmdbId, malId, dbSeason, dbEpisode, type);
+                    validLinks.push(link);
+                    allLinks.push(link);
+                    this.logger.log(`Valid link found (${link.isM3U8 ? 'HLS' : 'Direct'}): ${link.url.substring(0, 100)}...`);
+                    if (onLinkFound) onLinkFound(link);
+                    checkSpeculativeCompletion();
+                  } else {
+                    this.logger.warn(`REJECTED by validation: ${link.url.substring(0, 100)}...`);
+                  }
+                } catch (valError: any) {
+                  this.logger.error(`Validation crashed for ${link.url}: ${valError.message}`);
+                }
+              }));
             }));
           } catch (e: any) {
             this.logger.warn(`${scraper.name} mirror ${result.url} failed: ${e.message}`);
@@ -471,8 +500,8 @@ export class ProvidersService {
         const item = queue.shift();
         if (!item) break;
 
-        const dbSeason = item.mediaType === 'tv' ? 1 : null;
-        const dbEpisode = item.mediaType === 'tv' ? 1 : (item.mediaType === 'anime' ? 1 : null);
+        const dbSeason = (item.mediaType === 'tv' || item.mediaType === 'anime') ? 1 : null;
+        const dbEpisode = (item.mediaType === 'tv' || item.mediaType === 'anime') ? 1 : null;
         const prefetchKey = `${item.mediaType}:${item.id}:s${dbSeason}:e${dbEpisode}`;
 
         if (this.activePrefetches.has(prefetchKey)) {
