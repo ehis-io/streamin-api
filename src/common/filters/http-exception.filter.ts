@@ -26,9 +26,23 @@ export class HttpExceptionFilter implements ExceptionFilter {
             message: (typeof message === 'object' && message !== null) ? message : { message },
         };
 
-        // 🧱 CORS for error responses
-        // 🧱 Wide open CORS for error responses
-        response.setHeader('Access-Control-Allow-Origin', '*');
+        // 🧱 Secure CORS for error responses
+        const allowedOrigins = [
+            'https://www.filmstreamer.org',
+            'https://filmstreamer.org',
+            'http://localhost:3000',
+            'http://localhost:3001',
+        ];
+        const originHeader = request.headers.origin as string;
+        const refererHeader = request.headers.referer as string;
+        let refererOrigin: string | null = null;
+        try { if (refererHeader) refererOrigin = new URL(refererHeader).origin; } catch (e) {}
+
+        const finalOrigin = allowedOrigins.includes(originHeader) ? originHeader : 
+                            (allowedOrigins.includes(refererOrigin!) ? refererOrigin : allowedOrigins[0]);
+
+        response.setHeader('Access-Control-Allow-Origin', finalOrigin!);
+        response.setHeader('Access-Control-Allow-Credentials', 'true');
         response.setHeader('Access-Control-Allow-Methods', 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS');
         response.setHeader('Access-Control-Allow-Headers', '*');
         response.setHeader('Access-Control-Expose-Headers', '*');

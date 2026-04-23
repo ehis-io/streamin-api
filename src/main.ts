@@ -15,7 +15,13 @@ async function bootstrap() {
   app.useGlobalPipes(new ValidationPipe({ transform: true }));
   app.useGlobalFilters(new HttpExceptionFilter());
   app.enableCors({
-    origin: '*',
+    origin: [
+      'https://www.filmstreamer.org',
+      'https://filmstreamer.org',
+      'http://localhost:3000',
+      'http://localhost:3001',
+    ],
+    credentials: true,
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     allowedHeaders: '*',
     exposedHeaders: '*',
