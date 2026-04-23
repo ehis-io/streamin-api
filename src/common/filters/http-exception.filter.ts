@@ -35,7 +35,8 @@ export class HttpExceptionFilter implements ExceptionFilter {
             response.setHeader('Access-Control-Allow-Origin', '*');
         }
         response.setHeader('Access-Control-Allow-Methods', 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS');
-        response.setHeader('Access-Control-Allow-Headers', 'Content-Type,Accept,Authorization,Origin,Range,Referer');
+        response.setHeader('Access-Control-Allow-Headers', 'Content-Type,Accept,Authorization,Origin,Range,Referer,Cache-Control,Pragma,X-Requested-With,X-Playback-Session-Id');
+        response.setHeader('Access-Control-Expose-Headers', 'Content-Range,Content-Length,Accept-Ranges');
 
         response.status(status).json(errorResponse);
 

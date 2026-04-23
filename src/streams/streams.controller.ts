@@ -38,6 +38,7 @@ export class StreamsController {
     @Query('url') url: string,
     @Query('headers') headersStr: string,
     @Res() res: Response,
+    @Req() req: Request,
   ) {
     if (!url) {
       res.status(400).json({ error: 'url query parameter is required' });
@@ -62,6 +63,19 @@ export class StreamsController {
         const cleaned = await this.hlsProxyService.getCleanManifest(url, headers);
         res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
         res.setHeader('Cache-Control', 'no-cache'); // Don't cache manifests as they are dynamic
+
+        // 🧱 Explicit CORS for manifests
+        const origin = req.headers.origin;
+        if (origin) {
+          res.setHeader('Access-Control-Allow-Origin', origin);
+          res.setHeader('Access-Control-Allow-Credentials', 'true');
+        } else {
+          res.setHeader('Access-Control-Allow-Origin', '*');
+        }
+        res.setHeader('Access-Control-Allow-Methods', 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Accept,Authorization,Origin,Range,Referer,Cache-Control,Pragma,X-Requested-With,X-Playback-Session-Id');
+        res.setHeader('Access-Control-Expose-Headers', 'Content-Range,Content-Length,Accept-Ranges');
+
         res.send(cleaned);
       } else {
         // Proxy binary segment/key
