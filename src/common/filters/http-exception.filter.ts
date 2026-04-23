@@ -27,12 +27,12 @@ export class HttpExceptionFilter implements ExceptionFilter {
         };
 
         // 🧱 CORS for error responses
-        const origin = request.headers.origin;
-        if (origin) {
-            response.setHeader('Access-Control-Allow-Origin', origin as string);
+        // 🧱 Nuclear CORS fallback for error responses
+        const origin = request.headers.origin || (request.headers.referer ? new URL(request.headers.referer as string).origin : '*');
+        
+        response.setHeader('Access-Control-Allow-Origin', origin);
+        if (origin !== '*') {
             response.setHeader('Access-Control-Allow-Credentials', 'true');
-        } else {
-            response.setHeader('Access-Control-Allow-Origin', '*');
         }
         response.setHeader('Access-Control-Allow-Methods', 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS');
         response.setHeader('Access-Control-Allow-Headers', 'Content-Type,Accept,Authorization,Origin,Range,Referer,Cache-Control,Pragma,X-Requested-With,X-Playback-Session-Id');

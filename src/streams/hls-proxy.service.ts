@@ -248,13 +248,12 @@ export class HlsProxyService {
       const cacheControl = response.headers['cache-control'];
       if (cacheControl) res.setHeader('Cache-Control', cacheControl);
 
-      // 🧱 Explicit CORS for proxied resources (HLS segments/keys)
-      const origin = res.req?.headers?.origin;
-      if (origin) {
-        res.setHeader('Access-Control-Allow-Origin', origin);
+      // 🧱 Nuclear CORS fallback for proxied resources (HLS segments/keys)
+      const origin = res.req?.headers?.origin || (res.req?.headers?.referer ? new URL(res.req.headers.referer as string).origin : '*');
+      
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      if (origin !== '*') {
         res.setHeader('Access-Control-Allow-Credentials', 'true');
-      } else {
-        res.setHeader('Access-Control-Allow-Origin', '*');
       }
       res.setHeader('Access-Control-Allow-Methods', 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS');
       res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Accept,Authorization,Origin,Range,Referer,Cache-Control,Pragma,X-Requested-With,X-Playback-Session-Id');
