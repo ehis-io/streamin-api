@@ -27,16 +27,11 @@ export class HttpExceptionFilter implements ExceptionFilter {
         };
 
         // 🧱 CORS for error responses
-        // 🧱 Nuclear CORS fallback for error responses
-        const origin = request.headers.origin || (request.headers.referer ? new URL(request.headers.referer as string).origin : '*');
-        
-        response.setHeader('Access-Control-Allow-Origin', origin);
-        if (origin !== '*') {
-            response.setHeader('Access-Control-Allow-Credentials', 'true');
-        }
+        // 🧱 Wide open CORS for error responses
+        response.setHeader('Access-Control-Allow-Origin', '*');
         response.setHeader('Access-Control-Allow-Methods', 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS');
-        response.setHeader('Access-Control-Allow-Headers', 'Content-Type,Accept,Authorization,Origin,Range,Referer,Cache-Control,Pragma,X-Requested-With,X-Playback-Session-Id');
-        response.setHeader('Access-Control-Expose-Headers', 'Content-Range,Content-Length,Accept-Ranges');
+        response.setHeader('Access-Control-Allow-Headers', '*');
+        response.setHeader('Access-Control-Expose-Headers', '*');
 
         response.status(status).json(errorResponse);
 

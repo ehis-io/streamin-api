@@ -64,16 +64,11 @@ export class StreamsController {
         res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
         res.setHeader('Cache-Control', 'no-cache'); // Don't cache manifests as they are dynamic
 
-        // 🧱 Nuclear CORS fallback
-        const origin = req.headers.origin || (req.headers.referer ? new URL(req.headers.referer as string).origin : '*');
-        
-        res.setHeader('Access-Control-Allow-Origin', origin);
-        if (origin !== '*') {
-          res.setHeader('Access-Control-Allow-Credentials', 'true');
-        }
+        // 🧱 Wide open CORS for manifests
+        res.setHeader('Access-Control-Allow-Origin', '*');
         res.setHeader('Access-Control-Allow-Methods', 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS');
-        res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Accept,Authorization,Origin,Range,Referer,Cache-Control,Pragma,X-Requested-With,X-Playback-Session-Id');
-        res.setHeader('Access-Control-Expose-Headers', 'Content-Range,Content-Length,Accept-Ranges');
+        res.setHeader('Access-Control-Allow-Headers', '*');
+        res.setHeader('Access-Control-Expose-Headers', '*');
 
         res.send(cleaned);
       } else {

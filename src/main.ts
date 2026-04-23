@@ -15,11 +15,10 @@ async function bootstrap() {
   app.useGlobalPipes(new ValidationPipe({ transform: true }));
   app.useGlobalFilters(new HttpExceptionFilter());
   app.enableCors({
-    origin: true,
-    credentials: true,
+    origin: '*',
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
-    allowedHeaders: 'Content-Type,Accept,Authorization,Origin,Range,Referer,Cache-Control,Pragma,X-Requested-With,X-Playback-Session-Id',
-    exposedHeaders: 'Content-Range,Content-Length,Accept-Ranges',
+    allowedHeaders: '*',
+    exposedHeaders: '*',
   });
   app.setGlobalPrefix('api/v1');
 
