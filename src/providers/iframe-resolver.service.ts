@@ -22,6 +22,8 @@ const AD_DOMAINS = [
   'trkclick.com', 'syndication.realsrv.com', 'tsyndicate.com',
   'bidgear.com', 'dolohen.com', 'adskeeper.co.uk', 'sentry.io',
   'hotjar.com', 'mixpanel.com', 'onesignal.com', 'crashlytics.com',
+  'cloudeff.com', 'cloudflareresolve.com', 'jads.co', 'shorte.st',
+  'ouo.io', 'adf.ly', 'bit.ly', 'cpmrevenuegate.com', 'onclkds.com'
 ];
 
 @Injectable()
@@ -149,6 +151,12 @@ export class IframeResolverService {
         // Try to auto-click play buttons if present
         await this.tryClickPlay(page);
 
+        // Fast exit if we already have links after play click
+        if (foundLinks.length > 0) {
+          this.logger.debug(`Fast exit: links found immediately after play click`);
+          return foundLinks;
+        }
+
         // Wait for video source: either early resolve (master found) or 2s timeout
         if (foundLinks.length === 0) {
           await Promise.race([
@@ -215,7 +223,8 @@ export class IframeResolverService {
       }
     } catch {}
 
-    await new Promise(r => setTimeout(r, 2000));
+    // Brief wait for network activity after clicks
+    await new Promise(r => setTimeout(r, 500));
   }
 
   /** Extract video source URLs directly from DOM elements */

@@ -107,56 +107,37 @@ export class ProvidersService {
 
     const requestKey = `${activeMediaType}:${numericId}:s${dbSeason}:e${dbEpisode}:${type}`;
 
-    let title = '';
-    let tmdbId: number | undefined;
-    let malId: number | undefined;
-    let imdbId: string | undefined;
-    let details: any;
+    // 🛡️ [OPTIMIZATION] Cache-First Resolution
+    // We check the cache immediately using the numeric ID before any metadata fetch.
+    const cacheKey = this.cacheService.buildCacheKey(
+      activeMediaType!,
+      activeMediaType !== 'anime' ? numericId : undefined,
+      activeMediaType === 'anime' ? numericId : undefined,
+      dbSeason,
+      dbEpisode,
+      type
+    );
 
-    try {
-      if (activeMediaType === 'anime') {
-        malId = numericId;
-        const animeResponse = await this.malService.getDetails(malId);
-        details = (animeResponse as any).data;
-        title = details.title;
-
-        // Start TMDB mapping in parallel with scraping
-        const tmdbMappingPromise = this.tmdbService.search(title, 'tv')
-          .then(searchRes => {
-            if (searchRes.results && searchRes.results.length > 0) {
-              tmdbId = searchRes.results[0].id;
-              this.logger.log(`Mapped Anime "${title}" (MAL: ${malId}) to TMDB ID: ${tmdbId}`);
-            }
-          })
-          .catch(err => this.logger.warn(`TMDB mapping failed: ${err.message}`));
-
-        const getCurrentPriority = () => this.inFlightRequests.get(requestKey)?.priority ?? priority;
-        const fetchPromise = (async () => {
-          try {
-            return await this.performFindStreamLinks(
-              id, numericId, title, tmdbId, malId, imdbId, activeMediaType,
-              dbSeason, dbEpisode, type, onLinkFound, getCurrentPriority,
-              tmdbMappingPromise
-            );
-          } finally {
-            this.inFlightRequests.delete(requestKey);
-          }
-        })();
-
-        this.inFlightRequests.set(requestKey, { promise: fetchPromise, priority });
-        return fetchPromise;
-
-      } else {
-        tmdbId = numericId;
-        details = await this.tmdbService.getDetails(tmdbId, activeMediaType as 'movie' | 'tv');
-        title = activeMediaType === 'movie' ? details.title : details.name;
-        imdbId = details.external_ids?.imdb_id || details.imdb_id;
-      }
-    } catch (e: any) {
-      this.logger.error(`Failed to fetch metadata for ${id} (${activeMediaType}): ${e.message}`);
-      return { links: [], scraperStatuses: [] };
+    const cachedRedis = await this.cacheService.getFromRedis(cacheKey);
+    if (cachedRedis?.some(l => l.isM3U8)) {
+      this.logger.log(`[Cache Hit: Redis] Returning cached streams for ${requestKey}`);
+      if (onLinkFound) cachedRedis.forEach(link => onLinkFound(link));
+      return { links: cachedRedis, scraperStatuses: [{ name: 'cache:redis', status: 'success', linksFound: cachedRedis.length, durationMs: 0 }] };
     }
 
+    const cachedDb = await this.cacheService.getFromDatabase(
+      activeMediaType!,
+      activeMediaType !== 'anime' ? numericId : undefined,
+      activeMediaType === 'anime' ? numericId : undefined,
+      dbSeason,
+      dbEpisode,
+      type
+    );
+    if (cachedDb?.some(l => l.isM3U8)) {
+      this.logger.log(`[Cache Hit: DB] Returning cached streams for ${requestKey}`);
+      if (onLinkFound) cachedDb.forEach(link => onLinkFound(link));
+      return { links: cachedDb, scraperStatuses: [{ name: 'cache:database', status: 'success', linksFound: cachedDb.length, durationMs: 0 }] };
+    }
 
     // Deduplication: join in-flight request
     const inFlight = this.inFlightRequests.get(requestKey);
@@ -175,13 +156,45 @@ export class ProvidersService {
 
     const fetchPromise = (async () => {
       try {
-        // Use a dynamic priority getter so logic within can see upgrades
+        let title = '';
+        let tmdbId: number | undefined;
+        let malId: number | undefined;
+        let imdbId: string | undefined;
+        let tmdbMappingPromise: Promise<void> | undefined;
+
+        // Metadata acquisition is now part of the resolution pipeline
+        if (activeMediaType === 'anime') {
+          malId = numericId;
+          const animeResponse = await this.malService.getDetails(malId);
+          const details = (animeResponse as any).data;
+          title = details.title;
+
+          // Start TMDB mapping in parallel
+          tmdbMappingPromise = this.tmdbService.search(title, 'tv')
+            .then(searchRes => {
+              if (searchRes.results && searchRes.results.length > 0) {
+                tmdbId = searchRes.results[0].id;
+                this.logger.log(`Mapped Anime "${title}" (MAL: ${malId}) to TMDB ID: ${tmdbId}`);
+              }
+            })
+            .catch(err => this.logger.warn(`TMDB mapping failed: ${err.message}`));
+        } else {
+          tmdbId = numericId;
+          const details = await this.tmdbService.getDetails(tmdbId, activeMediaType as 'movie' | 'tv');
+          title = activeMediaType === 'movie' ? details.title : details.name;
+          imdbId = details.external_ids?.imdb_id || details.imdb_id;
+        }
+
         const getCurrentPriority = () => this.inFlightRequests.get(requestKey)?.priority ?? priority;
         
         return await this.performFindStreamLinks(
           id, numericId, title, tmdbId, malId, imdbId, activeMediaType,
-          dbSeason, dbEpisode, type, onLinkFound, getCurrentPriority
+          dbSeason, dbEpisode, type, onLinkFound, getCurrentPriority,
+          tmdbMappingPromise
         );
+      } catch (e: any) {
+        this.logger.error(`Failed to resolve streams for ${id} (${activeMediaType}): ${e.message}`);
+        return { links: [], scraperStatuses: [] };
       } finally {
         this.inFlightRequests.delete(requestKey);
       }
@@ -209,33 +222,9 @@ export class ProvidersService {
     const getPriority = () => typeof priority === 'function' ? priority() : priority;
     const season = dbSeason;
     const episode = dbEpisode;
-
-    // 1. Check Redis Cache
     const cacheKey = this.cacheService.buildCacheKey(activeMediaType!, tmdbId, malId, dbSeason, dbEpisode, type);
-    // 1. Check Redis Cache
-    const cachedRedis = await this.cacheService.getFromRedis(cacheKey);
-    const hasM3U8Redis = cachedRedis?.some(l => l.isM3U8);
 
-    if (cachedRedis && hasM3U8Redis) {
-      if (onLinkFound) cachedRedis.forEach(link => onLinkFound(link));
-      return { links: cachedRedis, scraperStatuses: [{ name: 'cache:redis', status: 'success', linksFound: cachedRedis.length, durationMs: 0 }] };
-    }
-
-    // 2. Check DB
-    const cachedDb = await this.cacheService.getFromDatabase(activeMediaType!, tmdbId, malId, dbSeason, dbEpisode, type);
-    const hasM3U8Db = cachedDb?.some(l => l.isM3U8);
-
-    if (cachedDb && hasM3U8Db) {
-      this.logger.log(`Found ${cachedDb.length} cached links (including M3U8) for ${title} in the database`);
-      if (onLinkFound) cachedDb.forEach(link => onLinkFound(link));
-      return { links: cachedDb, scraperStatuses: [{ name: 'cache:database', status: 'success', linksFound: cachedDb.length, durationMs: 0 }] };
-    }
-
-    if ((cachedRedis && cachedRedis.length > 0) || (cachedDb && cachedDb.length > 0)) {
-       this.logger.log(`Found cached links for ${title}, but no M3U8. Proceeding with fresh scrape...`);
-    }
-
-    this.logger.log(`Resolving streams for ${title} (${activeMediaType}) - S${dbSeason} E${dbEpisode} [Priority: ${priority}]`);
+    this.logger.log(`Resolving streams for ${title} (${activeMediaType}) - S${dbSeason} E${dbEpisode} [Priority: ${getPriority()}]`);
 
     const allLinks: StreamLink[] = [];
     const scraperStatuses: ScraperStatus[] = [];
@@ -261,8 +250,8 @@ export class ProvidersService {
           l.url.includes('master')
       );
 
-      if (hasHighQuality || m3u8Links.length >= 2) {
-        this.logger.debug(`Speculative completion: quality threshold reached, resolving early`);
+      if (hasHighQuality || (activeMediaType === 'anime' && m3u8Links.length >= 1) || m3u8Links.length >= 2) {
+        this.logger.debug(`Speculative completion: ${activeMediaType === 'anime' ? 'anime' : 'quality'} threshold reached, resolving early`);
         speculativeResolve?.();
         return;
       }
@@ -317,8 +306,9 @@ export class ProvidersService {
 
           this.logger.debug(`Searching for ${scraper.name} using query: "${searchQuery}"`);
           
-          // If this scraper needs TMDB ID and it's not yet available, wait for the mapping promise
-          if (!tmdbId && tmdbMappingPromise && (scraper.name === 'VidSrc' || scraper.name === 'VidLink')) {
+          // If this scraper needs TMDB ID and it's not yet available, wait for the mapping promise.
+          // VidLink is EXCEPTED because it supports MAL IDs directly for anime.
+          if (!tmdbId && tmdbMappingPromise && scraper.name === 'VidSrc') {
             this.logger.debug(`Waiting for TMDB mapping for ${scraper.name}...`);
             await tmdbMappingPromise;
           }
