@@ -18,7 +18,7 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
 
   constructor(private configService: ConfigService) {
     puppeteer.use(StealthPlugin());
-    this.maxPages = this.configService.get<number>('PUPPETEER_MAX_PAGES', 10);
+    this.maxPages = this.configService.get<number>('PUPPETEER_MAX_PAGES', 6);
 
     const proxyConfig = this.configService.get<string>('PROXY_URLS', '');
     this.proxyUrls = proxyConfig
@@ -143,6 +143,19 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
           request.continue();
         }
       });
+
+      // 🛡️ Global Stealth & Anti-Ad settings (applied once per page)
+      await page.evaluateOnNewDocument(() => {
+        Object.defineProperty(navigator, 'webdriver', { get: () => false });
+        (window as any).open = () => null;
+        (window as any).alert = () => {};
+        (window as any).confirm = () => true;
+        (window as any).prompt = () => null;
+      });
+
+      await page.setUserAgent(
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
+      );
 
       page.setDefaultNavigationTimeout(60000);
       page.setDefaultTimeout(60000);

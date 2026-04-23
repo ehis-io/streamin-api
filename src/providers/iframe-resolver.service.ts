@@ -133,20 +133,8 @@ export class IframeResolverService {
         }
       });
 
-      // Disable window.open to prevent popups
-      await page.evaluateOnNewDocument(() => {
-        window.open = () => null;
-        window.alert = () => {};
-        window.confirm = () => true;
-        window.prompt = () => null;
-      });
-
-      await page.setUserAgent(
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-      );
-
       try {
-        await page.goto(embedUrl, { waitUntil: 'domcontentloaded', timeout: 8000 });
+        await page.goto(embedUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
 
         // Try to auto-click play buttons if present
         await this.tryClickPlay(page);
