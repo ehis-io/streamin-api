@@ -144,16 +144,16 @@ export class IframeResolverService {
       );
 
       try {
-        await page.goto(embedUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+        await page.goto(embedUrl, { waitUntil: 'domcontentloaded', timeout: 8000 });
 
         // Try to auto-click play buttons if present
         await this.tryClickPlay(page);
 
-        // Wait for video source: either early resolve (master found) or 5s timeout
+        // Wait for video source: either early resolve (master found) or 2s timeout
         if (foundLinks.length === 0) {
           await Promise.race([
             earlyResolvePromise,
-            new Promise(r => setTimeout(r, 5000)),
+            new Promise(r => setTimeout(r, 2000)),
           ]);
         }
 

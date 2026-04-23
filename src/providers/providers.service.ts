@@ -65,7 +65,7 @@ export class ProvidersService {
     this.scrapers.sort((a, b) => (b.priority || 0) - (a.priority || 0));
     this.logger.log(`Registered ${this.scrapers.length} scrapers: ${this.scrapers.map(s => s.name).join(', ')}`);
 
-    this.STREAM_TIMEOUT_MS = this.configService.get<number>('STREAM_TIMEOUT_MS', 30000); // Increased to 30s for better stability
+    this.STREAM_TIMEOUT_MS = this.configService.get<number>('STREAM_TIMEOUT_MS', 15000);
 
     axios.defaults.httpAgent = httpAgent;
     axios.defaults.httpsAgent = httpsAgent;
@@ -337,25 +337,21 @@ export class ProvidersService {
 
             let links = await scraper.getStreamLinks(result.url, streamParams, getPriority());
 
-            // 🛡️ RECURSIVE RESOLUTION: If any link is a known mirror, resolve it to M3U8
+            // 🛡️ RECURSIVE RESOLUTION: Resolve all mirror links in parallel
             const mirrorsScraper = this.scrapers.find(s => s.name === 'MirrorResolver');
             if (mirrorsScraper) {
-              const resolvedLinks: StreamLink[] = [];
-              for (const link of links) {
-                const isMirror = /streamwish|filemoon|voe\.sx|doodstream|mixdrop|upstream|9animetv|gogocdn|embtaku|vidcloud|upcloud|vidsrc|vidlink/i.test(link.url);
-                if (isMirror && !link.isM3U8) {
-                  this.logger.debug(`Found mirror link, attempting deep resolution: ${link.url}`);
-                  const deepLinks = await mirrorsScraper.getStreamLinks(link.url, streamParams, getPriority());
-                  if (deepLinks.length > 0) {
-                    resolvedLinks.push(...deepLinks);
-                  } else {
-                    resolvedLinks.push(link); // Keep original if resolution fails
+              const resolvedGroups = await Promise.all(
+                links.map(async (link) => {
+                  const isMirror = /streamwish|filemoon|voe\.sx|doodstream|mixdrop|upstream|9animetv|gogocdn|embtaku|vidcloud|upcloud|vidsrc|vidlink/i.test(link.url);
+                  if (isMirror && !link.isM3U8) {
+                    this.logger.debug(`Found mirror link, attempting deep resolution: ${link.url}`);
+                    const deepLinks = await mirrorsScraper.getStreamLinks(link.url, streamParams, getPriority());
+                    return deepLinks.length > 0 ? deepLinks : [link];
                   }
-                } else {
-                  resolvedLinks.push(link);
-                }
-              }
-              links = resolvedLinks;
+                  return [link];
+                })
+              );
+              links = resolvedGroups.flat();
             }
 
             const taggedLinks = links.map(l => ({
