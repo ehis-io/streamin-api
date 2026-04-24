@@ -465,12 +465,21 @@ export class ProvidersService {
                 // Background: validate & persist. If validation fails, remove from cache.
                 (async () => {
                   try {
-                    const isValid = await this.validationService.validateStream(link.url, getPriority());
+                    // 🛡️ TRUSTED PROVIDER BYPASS: Iframes for TV/Anime from major providers are trusted
+                    const isTrustedIframe = !link.isM3U8 && 
+                      (activeMediaType === 'tv' || activeMediaType === 'anime') &&
+                      /vidsrc|vidlink|9animetv|gogocdn|embtaku|vidcloud|upcloud|animepahe/i.test(link.url);
+
+                    let isValid = true;
+                    if (!isTrustedIframe) {
+                      isValid = await this.validationService.validateStream(link.url, getPriority());
+                    }
+
                     if (isValid) {
                       await this.cacheService.saveToDatabase(link, activeMediaType!, tmdbId, malId, dbSeason, dbEpisode, type);
                     } else {
                       this.logger.warn(`Background validation rejected: ${link.url.substring(0, 100)}...`);
-                      // Remove from in-memory list so the Redis cache (saved below) reflects only valid links
+                      // Remove from in-memory list so the Redis cache reflects only valid links
                       const idx = allLinks.findIndex(l => l.url === link.url);
                       if (idx >= 0) allLinks.splice(idx, 1);
                     }
