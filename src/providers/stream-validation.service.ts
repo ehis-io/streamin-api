@@ -19,7 +19,7 @@ export class StreamValidationService {
   private readonly activeValidations = new Map<string, number>();
   private readonly coolingDownDomains = new Map<string, number>();
 
-  async validateStream(url: string, priority: number = 0): Promise<boolean> {
+  async validateStream(url: string, headers?: Record<string, string>, priority: number = 0): Promise<boolean> {
     // 🛡️ Skip validation for internal API URLs
     const apiUrl = this.configService.get<string>('API_URL');
     if (apiUrl && url.includes(new URL(apiUrl).host)) {
@@ -41,7 +41,7 @@ export class StreamValidationService {
       domain.includes('9animetv.be');
 
     if (!isRestricted) {
-      return this.executeValidation(url);
+      return this.executeValidation(url, headers);
     }
 
     const coolDownUntil = this.coolingDownDomains.get(domain);
@@ -57,7 +57,7 @@ export class StreamValidationService {
         this.activeValidations.set(domain, active + 1);
 
         try {
-          const result = await this.executeValidation(url);
+          const result = await this.executeValidation(url, headers);
           resolve(result);
         } finally {
           const newActive = (this.activeValidations.get(domain) || 1) - 1;
@@ -83,15 +83,26 @@ export class StreamValidationService {
     }
   }
 
-  private async executeValidation(url: string, attempt: number = 1): Promise<boolean> {
+  private async executeValidation(url: string, headers?: Record<string, string>, attempt: number = 1): Promise<boolean> {
     const domain = new URL(url).hostname;
     try {
+      let parsedUrlHeaders = {};
+      try {
+        const urlObj = new URL(url);
+        const hParam = urlObj.searchParams.get('headers');
+        if (hParam) parsedUrlHeaders = JSON.parse(hParam);
+      } catch (e) {}
+
+      const reqHeaders = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Referer': url,
+        ...headers,
+        ...parsedUrlHeaders
+      };
+
       try {
         const headResponse = await axios.head(url, {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Referer': url
-          },
+          headers: reqHeaders,
           timeout: 500 // ⚡ Reduced from 1000ms → 500ms, fail fast and move on
         });
         if (headResponse.status === 200) return true;
@@ -100,10 +111,7 @@ export class StreamValidationService {
       }
 
       const response = await axios.get(url, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-          'Referer': url
-        },
+        headers: reqHeaders,
         timeout: 2000,
         responseType: 'stream'
       });
@@ -141,7 +149,7 @@ export class StreamValidationService {
         this.logger.warn(`Rate limited (429) by ${domain}. Retrying in ${this.RETRY_DELAY_MS}ms (Attempt ${attempt}/${this.MAX_RETRIES})`);
         this.coolingDownDomains.set(domain, Date.now() + this.COOL_DOWN_MS);
         await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY_MS));
-        return this.executeValidation(url, attempt + 1);
+        return this.executeValidation(url, headers, attempt + 1);
       }
 
       this.logger.debug(`Stream validation failed for ${url}: ${e.message}`);

@@ -68,7 +68,8 @@ export class StreamFreshnessService implements OnModuleInit {
         const results = await Promise.all(
           batch.map(async (link: any) => {
             try {
-              const isValid = await this.validationService.validateStream(link.url);
+              const headers = link.headers ? (typeof link.headers === 'string' ? JSON.parse(link.headers) : link.headers) : undefined;
+              const isValid = await this.validationService.validateStream(link.url, headers);
               return { id: link.id, isValid };
             } catch {
               return { id: link.id, isValid: false };

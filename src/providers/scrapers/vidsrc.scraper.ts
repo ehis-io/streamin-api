@@ -8,7 +8,6 @@ export class VidSrcScraper implements Scraper {
   priority = 100;
   private readonly logger = new Logger(VidSrcScraper.name);
   private readonly baseUrls: string[];
-
   constructor(private configService: ConfigService) {
     const urls = this.configService.get<string>('VIDSRC_BASE_URLS');
     this.baseUrls = urls
@@ -17,7 +16,7 @@ export class VidSrcScraper implements Scraper {
         'https://vidsrc.me',
         'https://vidsrc.pm',
         'https://vidsrc.xyz',
-        'https://vidsrc.pro'
+        'https://vidsrc.net'
       ];
   }
 

@@ -465,14 +465,13 @@ export class ProvidersService {
                 // Background: validate & persist. If validation fails, remove from cache.
                 (async () => {
                   try {
-                    // 🛡️ TRUSTED PROVIDER BYPASS: Iframes for TV/Anime from major providers are trusted
+                    // 🛡️ TRUSTED PROVIDER BYPASS: Iframes from major providers are trusted
                     const isTrustedIframe = !link.isM3U8 && 
-                      (activeMediaType === 'tv' || activeMediaType === 'anime') &&
                       /vidsrc|vidlink|9animetv|gogocdn|embtaku|vidcloud|upcloud|animepahe/i.test(link.url);
 
                     let isValid = true;
                     if (!isTrustedIframe) {
-                      isValid = await this.validationService.validateStream(link.url, getPriority());
+                      isValid = await this.validationService.validateStream(link.url, link.headers, getPriority());
                     }
 
                     if (isValid) {
