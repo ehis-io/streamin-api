@@ -66,11 +66,13 @@ export class StreamsGateway implements OnGatewayConnection, OnGatewayDisconnect 
                 data.type,
                 data.mediaType,
                 (link) => {
+                    this.logger.debug(`[WS] Emitting stream-link for ${data.id} (Req: ${data.requestId})`);
                     client.emit('stream-link', { link, requestId: data.requestId });
                 },
                 0
             );
 
+            this.logger.log(`[WS] find-streams complete for ${data.id}. Found ${result.links.length} links.`);
             client.emit('streams-complete', { links: result.links, scraperStatuses: result.scraperStatuses, requestId: data.requestId });
         } catch (err: any) {
             this.logger.error(`WS find-streams failed: ${err.message}`);
