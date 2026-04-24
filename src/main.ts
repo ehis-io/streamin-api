@@ -5,6 +5,7 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { setGlobalDispatcher, Agent } from 'undici';
 import * as dns from 'dns';
+import compression from 'compression';
 
 async function bootstrap() {
   // Force IPv4 for native fetch (used by myanimelist-wrapper)
@@ -12,6 +13,19 @@ async function bootstrap() {
   dns.setDefaultResultOrder('ipv4first');
 
   const app = await NestFactory.create(AppModule);
+
+  // 🚀 gzip/deflate compression — M3U8 manifests are highly compressible (~80% size reduction).
+  // Binary segments are skipped automatically (compression's default filter checks Content-Type).
+  app.use(compression({
+    threshold: 1024, // Only compress responses ≥1KB
+    filter: (req: any, res: any) => {
+      // Don't compress segment proxy responses (already compressed / binary)
+      const contentType = res.getHeader('Content-Type') as string | undefined;
+      if (contentType && /video|image|audio/.test(contentType)) return false;
+      return compression.filter(req, res);
+    },
+  }));
+
   app.useGlobalPipes(new ValidationPipe({ transform: true }));
   app.useGlobalFilters(new HttpExceptionFilter());
 

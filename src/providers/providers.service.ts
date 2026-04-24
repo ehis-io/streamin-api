@@ -41,6 +41,42 @@ function qualityScore(link: StreamLink): number {
   return 5;
 }
 
+/**
+ * Decide whether a stream needs to be proxied through our backend.
+ *
+ * Proxy IS needed when:
+ *  - Source is known to inject ads into the manifest (SCTE-35, VAST, etc.)
+ *  - Source requires a Referer header that the browser can't set directly
+ *  - CDN doesn't return CORS headers
+ *
+ * Otherwise, the browser can hit the CDN directly → saves the double-hop
+ * (~100-500ms per segment) on every `.ts` fetch.
+ */
+function determineNeedsProxy(link: StreamLink): boolean {
+  if (!link.isM3U8) return false;
+
+  // If the scraper set custom headers beyond User-Agent, the browser can't
+  // forward them on cross-origin fetches — we must proxy.
+  if (link.headers) {
+    const keys = Object.keys(link.headers).map(k => k.toLowerCase());
+    const needsForwardedHeaders = keys.some(k =>
+      k === 'referer' || k === 'origin' || k === 'cookie' || k === 'authorization',
+    );
+    if (needsForwardedHeaders) return true;
+  }
+
+  const urlLower = link.url.toLowerCase();
+
+  // Sources known to inject server-side ads (SCTE-35 / SSAI)
+  const knownAdInjectors = [
+    'ssaimanifest', 'dai.google', 'stitcher', 'mediatailor',
+  ];
+  if (knownAdInjectors.some(p => urlLower.includes(p))) return true;
+
+  // Default: direct playback (fast path)
+  return false;
+}
+
 @Injectable()
 export class ProvidersService {
   private readonly logger = new Logger(ProvidersService.name);
@@ -118,21 +154,25 @@ export class ProvidersService {
       type
     );
 
-    const cachedRedis = await this.cacheService.getFromRedis(cacheKey);
+    // Parallelize Redis + DB cache checks — they're both independent reads
+    const [cachedRedis, cachedDb] = await Promise.all([
+      this.cacheService.getFromRedis(cacheKey),
+      this.cacheService.getFromDatabase(
+        activeMediaType!,
+        activeMediaType !== 'anime' ? numericId : undefined,
+        activeMediaType === 'anime' ? numericId : undefined,
+        dbSeason,
+        dbEpisode,
+        type,
+      ),
+    ]);
+
     if (cachedRedis?.some(l => l.isM3U8)) {
       this.logger.log(`[Cache Hit: Redis] Returning cached streams for ${requestKey}`);
       if (onLinkFound) cachedRedis.forEach(link => onLinkFound(link));
       return { links: cachedRedis, scraperStatuses: [{ name: 'cache:redis', status: 'success', linksFound: cachedRedis.length, durationMs: 0 }] };
     }
 
-    const cachedDb = await this.cacheService.getFromDatabase(
-      activeMediaType!,
-      activeMediaType !== 'anime' ? numericId : undefined,
-      activeMediaType === 'anime' ? numericId : undefined,
-      dbSeason,
-      dbEpisode,
-      type
-    );
     if (cachedDb?.some(l => l.isM3U8)) {
       this.logger.log(`[Cache Hit: DB] Returning cached streams for ${requestKey}`);
       if (onLinkFound) cachedDb.forEach(link => onLinkFound(link));
@@ -156,41 +196,41 @@ export class ProvidersService {
 
     const fetchPromise = (async () => {
       try {
-        let title = '';
-        let tmdbId: number | undefined;
-        let malId: number | undefined;
-        let imdbId: string | undefined;
-        let tmdbMappingPromise: Promise<void> | undefined;
+        const metadataPromise = (async () => {
+          let title = '';
+          let tmdbId: number | undefined;
+          let malId: number | undefined;
+          let imdbId: string | undefined;
+          let tmdbMappingPromise: Promise<void> | undefined;
 
-        // Metadata acquisition is now part of the resolution pipeline
-        if (activeMediaType === 'anime') {
-          malId = numericId;
-          const animeResponse = await this.malService.getDetails(malId);
-          const details = (animeResponse as any).data;
-          title = details.title;
-
-          // Start TMDB mapping in parallel
-          tmdbMappingPromise = this.tmdbService.search(title, 'tv')
-            .then(searchRes => {
-              if (searchRes.results && searchRes.results.length > 0) {
-                tmdbId = searchRes.results[0].id;
-                this.logger.log(`Mapped Anime "${title}" (MAL: ${malId}) to TMDB ID: ${tmdbId}`);
-              }
-            })
-            .catch(err => this.logger.warn(`TMDB mapping failed: ${err.message}`));
-        } else {
-          tmdbId = numericId;
-          const details = await this.tmdbService.getDetails(tmdbId, activeMediaType as 'movie' | 'tv');
-          title = activeMediaType === 'movie' ? details.title : details.name;
-          imdbId = details.external_ids?.imdb_id || details.imdb_id;
-        }
+          if (activeMediaType === 'anime') {
+            malId = numericId;
+            const animeResponse = await this.malService.getDetails(malId);
+            const details = (animeResponse as any).data;
+            title = details?.title || '';
+            
+            // Start TMDB mapping in parallel if needed
+            tmdbMappingPromise = this.tmdbService.search(title, 'tv')
+              .then(searchRes => {
+                if (searchRes.results && searchRes.results.length > 0) {
+                  tmdbId = searchRes.results[0].id;
+                }
+              })
+              .catch(() => {});
+          } else {
+            tmdbId = numericId;
+            const details = await this.tmdbService.getDetails(tmdbId, activeMediaType as 'movie' | 'tv');
+            title = activeMediaType === 'movie' ? details?.title : details?.name;
+            imdbId = details?.external_ids?.imdb_id || details?.imdb_id;
+          }
+          return { title, tmdbId, malId, imdbId, tmdbMappingPromise };
+        })();
 
         const getCurrentPriority = () => this.inFlightRequests.get(requestKey)?.priority ?? priority;
-        
+
         return await this.performFindStreamLinks(
-          id, numericId, title, tmdbId, malId, imdbId, activeMediaType,
-          dbSeason, dbEpisode, type, onLinkFound, getCurrentPriority,
-          tmdbMappingPromise
+          id, numericId, metadataPromise, activeMediaType,
+          dbSeason, dbEpisode, type, onLinkFound, getCurrentPriority
         );
       } catch (e: any) {
         this.logger.error(`Failed to resolve streams for ${id} (${activeMediaType}): ${e.message}`);
@@ -207,24 +247,38 @@ export class ProvidersService {
   private async performFindStreamLinks(
     id: string,
     numericId: number,
-    title: string,
-    tmdbId: number | undefined,
-    malId: number | undefined,
-    imdbId: string | undefined,
+    metadataPromise: Promise<{ title: string, tmdbId?: number, malId?: number, imdbId?: string, tmdbMappingPromise?: Promise<void> }>,
     activeMediaType: string | undefined,
     dbSeason: number | null,
     dbEpisode: number | null,
     type: 'sub' | 'dub',
     onLinkFound?: (link: StreamLink) => void,
-    priority: number | (() => number) = 0,
-    tmdbMappingPromise?: Promise<void>
+    priority: number | (() => number) = 0
   ): Promise<StreamResult> {
     const getPriority = () => typeof priority === 'function' ? priority() : priority;
     const season = dbSeason;
     const episode = dbEpisode;
+    
+    // We start with IDs from the request if available to avoid blocking on metadata
+    let tmdbId = activeMediaType !== 'anime' ? numericId : undefined;
+    let malId = activeMediaType === 'anime' ? numericId : undefined;
+    let imdbId: string | undefined;
+    let title = '';
+    let tmdbMappingPromise: Promise<void> | undefined;
+
+    // Start metadata resolution in background
+    metadataPromise.then(meta => {
+      title = meta.title;
+      if (meta.tmdbId) tmdbId = meta.tmdbId;
+      if (meta.malId) malId = meta.malId;
+      imdbId = meta.imdbId;
+      tmdbMappingPromise = meta.tmdbMappingPromise;
+      this.logger.debug(`Metadata resolved: ${title} (TMDB: ${tmdbId}, MAL: ${malId})`);
+    }).catch(e => this.logger.warn(`Metadata fetch failed: ${e.message}`));
+
     const cacheKey = this.cacheService.buildCacheKey(activeMediaType!, tmdbId, malId, dbSeason, dbEpisode, type);
 
-    this.logger.log(`Resolving streams for ${title} (${activeMediaType}) - S${dbSeason} E${dbEpisode} [Priority: ${getPriority()}]`);
+    this.logger.log(`Resolving streams for ID ${numericId} (${activeMediaType}) - S${dbSeason} E${dbEpisode} [Priority: ${getPriority()}]`);
 
     const allLinks: StreamLink[] = [];
     const scraperStatuses: ScraperStatus[] = [];
@@ -303,6 +357,16 @@ export class ProvidersService {
           this.logger.debug(`Using mapped URL for ${scraper.name}: ${mapping.externalUrl}`);
           searchResults = [{ title: title || 'Media', url: mapping.externalUrl }];
         } else {
+          // Wait for title if not yet available (needed for search)
+          if (!title) {
+            const meta = await metadataPromise;
+            title = meta.title;
+            if (meta.tmdbId) tmdbId = meta.tmdbId;
+            if (meta.malId) malId = meta.malId;
+            imdbId = meta.imdbId;
+            tmdbMappingPromise = meta.tmdbMappingPromise;
+          }
+
           const searchQuery = (activeMediaType === 'tv' && season)
             ? `${title} Season ${season}`
             : title;
@@ -310,9 +374,7 @@ export class ProvidersService {
           this.logger.debug(`Searching for ${scraper.name} using query: "${searchQuery}"`);
           
           // If this scraper needs TMDB ID and it's not yet available, wait for the mapping promise.
-          // VidLink is EXCEPTED because it supports MAL IDs directly for anime.
           if (!tmdbId && tmdbMappingPromise && scraper.name === 'VidSrc') {
-            this.logger.debug(`Waiting for TMDB mapping for ${scraper.name}...`);
             await tmdbMappingPromise;
           }
 
@@ -380,25 +442,37 @@ export class ProvidersService {
                 }];
               }
 
-              // Validate each resolved link immediately (pipelined)
-              await Promise.all(resolvedLinks.map(async (link) => {
-                if (isTimedOut) return;
-                try {
-                  const isValid = await this.validationService.validateStream(link.url, getPriority());
-                  if (isValid) {
-                    await this.cacheService.saveToDatabase(link, activeMediaType!, tmdbId, malId, dbSeason, dbEpisode, type);
-                    validLinks.push(link);
-                    allLinks.push(link);
-                    this.logger.log(`Valid link found (${link.isM3U8 ? 'HLS' : 'Direct'}): ${link.url.substring(0, 100)}...`);
-                    if (onLinkFound) onLinkFound(link);
-                    checkSpeculativeCompletion();
-                  } else {
-                    this.logger.warn(`REJECTED by validation: ${link.url.substring(0, 100)}...`);
+              // OPTIMISTIC PIPELINE: emit links immediately, validate in background.
+              // The frontend tries playback; if it fails, it fails over to next provider.
+              // This saves the HEAD+GET round-trip latency per link before first emit.
+              for (const link of resolvedLinks) {
+                if (isTimedOut) break;
+                // Tag whether the browser needs to route this through the backend proxy
+                link.needsProxy = determineNeedsProxy(link);
+
+                validLinks.push(link);
+                allLinks.push(link);
+                this.logger.log(`Link emitted (${link.isM3U8 ? 'HLS' : 'Direct'}, proxy=${link.needsProxy}): ${link.url.substring(0, 100)}...`);
+                if (onLinkFound) onLinkFound(link);
+                checkSpeculativeCompletion();
+
+                // Background: validate & persist. If validation fails, remove from cache.
+                (async () => {
+                  try {
+                    const isValid = await this.validationService.validateStream(link.url, getPriority());
+                    if (isValid) {
+                      await this.cacheService.saveToDatabase(link, activeMediaType!, tmdbId, malId, dbSeason, dbEpisode, type);
+                    } else {
+                      this.logger.warn(`Background validation rejected: ${link.url.substring(0, 100)}...`);
+                      // Remove from in-memory list so the Redis cache (saved below) reflects only valid links
+                      const idx = allLinks.findIndex(l => l.url === link.url);
+                      if (idx >= 0) allLinks.splice(idx, 1);
+                    }
+                  } catch (valError: any) {
+                    this.logger.error(`Validation crashed for ${link.url}: ${valError.message}`);
                   }
-                } catch (valError: any) {
-                  this.logger.error(`Validation crashed for ${link.url}: ${valError.message}`);
-                }
-              }));
+                })();
+              }
             }));
           } catch (e: any) {
             this.logger.warn(`${scraper.name} mirror ${result.url} failed: ${e.message}`);

@@ -39,8 +39,9 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
   async onModuleInit() {
     await this.ensureBrowser();
     // Pre-warm the pool with more pages to handle initial bursts
-    this.logger.log('Pre-warming Puppeteer page pool (4 pages)...');
-    const warmTasks = Array(4).fill(null).map(() => this.createNewPage());
+    const prewarmCount = Math.min(6, this.maxPages);
+    this.logger.log(`Pre-warming Puppeteer page pool (${prewarmCount} pages)...`);
+    const warmTasks = Array(prewarmCount).fill(null).map(() => this.createNewPage());
     const results = await Promise.all(warmTasks);
     results.forEach(warmed => {
       if (warmed) this.pagePool.push(warmed);

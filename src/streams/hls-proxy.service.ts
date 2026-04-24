@@ -1,20 +1,27 @@
-import { Injectable, Logger, HttpException, HttpStatus } from '@nestjs/common';
+import { Injectable, Logger, HttpException, HttpStatus, Inject } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import type { Cache } from 'cache-manager';
 import axios from 'axios';
+import * as http from 'http';
+import * as https from 'https';
+
+// Shared keep-alive agents with higher socket limits for HLS proxy throughput.
+// A single movie can issue 500-1000 parallel segment requests — defaults (maxSockets=Infinity
+// but per-host ~6) throttle concurrency. Explicit maxSockets avoids head-of-line blocking.
+const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 128, maxFreeSockets: 32 });
+const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 128, maxFreeSockets: 32 });
 
 /**
  * Fetches M3U8 manifests and strips injected ad segments before serving.
- *
- * Ad detection heuristics:
- * 1. SCTE-35 markers (#EXT-X-CUE-OUT / #EXT-X-CUE-IN)
- * 2. EXT-X-DATERANGE with SCTE35 class
- * 3. Discontinuity-wrapped blocks pointing to ad domains
- * 4. Segments whose URLs contain ad-related keywords
  */
 @Injectable()
 export class HlsProxyService {
   private readonly logger = new Logger(HlsProxyService.name);
   private readonly proxyBaseUrl: string;
+
+  /** Redis TTL for cleaned manifests — short because manifests are often live-edge sensitive */
+  private readonly MANIFEST_CACHE_TTL_MS = 3000;
 
   private readonly AD_URL_PATTERNS = [
     /\/ads?\//i,
@@ -31,7 +38,10 @@ export class HlsProxyService {
     /dai\.google/i,
   ];
 
-  constructor(private configService: ConfigService) {
+  constructor(
+    private configService: ConfigService,
+    @Inject(CACHE_MANAGER) private cacheManager: Cache,
+  ) {
     const port = this.configService.get<number>('PORT', 4001);
     const apiUrl = this.configService.get<string>('API_URL', `http://localhost:${port}`);
     this.proxyBaseUrl = `${apiUrl}/api/v1/streams/hls-proxy`;
@@ -41,16 +51,39 @@ export class HlsProxyService {
    * Build a proxy URL that routes a sub-manifest through this service.
    * Headers are passed as base64-encoded JSON.
    */
-  private buildProxyUrl(targetUrl: string, headers?: Record<string, string>): string {
+  private buildProxyUrl(targetUrl: string, headers?: Record<string, string>, proxySegments?: boolean): string {
     const params = new URLSearchParams({ url: targetUrl });
     if (headers && Object.keys(headers).length > 0) {
       params.set('headers', Buffer.from(JSON.stringify(headers)).toString('base64'));
     }
+    if (proxySegments) params.set('proxy_segs', '1');
     return `${this.proxyBaseUrl}?${params.toString()}`;
   }
 
-  /** Fetch, clean, and return an M3U8 manifest as a string */
-  async getCleanManifest(m3u8Url: string, headers?: Record<string, string>): Promise<string> {
+  /**
+   * Fetch, clean, and return an M3U8 manifest.
+   *
+   * @param proxySegments When true, rewrites segment URLs to go through this proxy
+   *                      (needed when origin requires Referer or blocks CORS). When false,
+   *                      segments point directly at the CDN — saves the double-hop.
+   */
+  async getCleanManifest(
+    m3u8Url: string,
+    headers?: Record<string, string>,
+    proxySegments: boolean = false,
+  ): Promise<string> {
+    // Redis cache: very short TTL, keyed by (url, proxySegments) so both variants coexist
+    const cacheKey = `hls:manifest:${proxySegments ? 'p' : 'd'}:${m3u8Url}`;
+    try {
+      const cached = await this.cacheManager.get<string>(cacheKey);
+      if (cached) {
+        this.logger.debug(`[Manifest Cache Hit] ${m3u8Url.substring(0, 80)}`);
+        return cached;
+      }
+    } catch (e: any) {
+      this.logger.debug(`Manifest cache read failed: ${e.message}`);
+    }
+
     const reqHeaders: Record<string, string> = {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
       ...headers,
@@ -60,26 +93,38 @@ export class HlsProxyService {
       headers: reqHeaders,
       timeout: 10000,
       responseType: 'text',
+      httpAgent,
+      httpsAgent,
     });
 
     const raw: string = response.data;
     // Handle redirects for accurate relative URL resolution
     const finalUrl = response.request?.res?.responseUrl || m3u8Url;
 
-    // Master playlist — rewrite variant URLs to proxy through us
+    let cleaned: string;
     if (raw.includes('#EXT-X-STREAM-INF')) {
-      return this.cleanMasterPlaylist(raw, finalUrl, headers);
+      cleaned = this.cleanMasterPlaylist(raw, finalUrl, headers, proxySegments);
+    } else {
+      cleaned = this.cleanMediaPlaylist(raw, finalUrl, headers, proxySegments);
     }
 
-    // Media playlist — strip ad segments and proxy resources
-    return this.cleanMediaPlaylist(raw, finalUrl, headers);
+    // Fire-and-forget cache write
+    this.cacheManager.set(cacheKey, cleaned, this.MANIFEST_CACHE_TTL_MS).catch(() => {});
+
+    return cleaned;
   }
 
   /**
-   * Master playlist: rewrite variant URLs so HLS.js fetches them
-   * through our proxy (where ad segments get stripped).
+   * Master playlist: rewrite variant URLs to route back through this proxy
+   * (so the media playlists also get ad-stripped). The `proxySegments` flag
+   * is propagated through the query string.
    */
-  private cleanMasterPlaylist(raw: string, baseUrl: string, headers?: Record<string, string>): string {
+  private cleanMasterPlaylist(
+    raw: string,
+    baseUrl: string,
+    headers?: Record<string, string>,
+    proxySegments: boolean = false,
+  ): string {
     const lines = raw.split(/\r?\n/);
     const cleaned: string[] = [];
 
@@ -96,7 +141,7 @@ export class HlsProxyService {
         const absoluteUrl = line.trim().startsWith('http')
           ? line.trim()
           : new URL(line.trim(), baseUrl).toString();
-        cleaned.push(this.buildProxyUrl(absoluteUrl, headers));
+        cleaned.push(this.buildProxyUrl(absoluteUrl, headers, proxySegments));
         continue;
       }
 
@@ -108,9 +153,17 @@ export class HlsProxyService {
 
   /**
    * Media playlist: identify and remove ad segments.
-   * Also recursively proxies all segments and keys to bypass CORS/Referer blocks.
+   *
+   * If `proxySegments` is false (fast path), segment URLs are made absolute
+   * but left pointing directly at the origin CDN. This removes the double-hop
+   * for every segment fetch.
    */
-  private cleanMediaPlaylist(raw: string, baseUrl: string, headers?: Record<string, string>): string {
+  private cleanMediaPlaylist(
+    raw: string,
+    baseUrl: string,
+    headers?: Record<string, string>,
+    proxySegments: boolean = false,
+  ): string {
     const lines = raw.split(/\r?\n/);
     const cleaned: string[] = [];
     let insideAdBreak = false;
@@ -128,43 +181,38 @@ export class HlsProxyService {
         continue;
       }
 
-      // --- SCTE-35 CUE-IN: leaving ad break ---
       if (line.startsWith('#EXT-X-CUE-IN')) {
         insideAdBreak = false;
         continue;
       }
 
-      // Skip everything inside a SCTE-35 ad break
       if (insideAdBreak) {
         if (!line.startsWith('#')) strippedSegments++;
         continue;
       }
 
-      // --- EXT-X-DATERANGE with SCTE35 class ---
       if (line.startsWith('#EXT-X-DATERANGE') && line.includes('SCTE35')) {
         continue;
       }
 
-      // Proxy URIs in tags (KEY, MAP, etc.)
+      // KEY / MAP URIs: only proxy when we're proxying segments (same constraints).
       if (line.startsWith('#EXT-X-KEY') || line.startsWith('#EXT-X-MAP')) {
         line = line.replace(/URI="([^"]+)"/, (_, uri) => {
           try {
             const absoluteUri = uri.startsWith('http') ? uri : new URL(uri, baseUrl).toString();
-            return `URI="${this.buildProxyUrl(absoluteUri, headers)}"`;
+            return `URI="${proxySegments ? this.buildProxyUrl(absoluteUri, headers, true) : absoluteUri}"`;
           } catch {
             return `URI="${uri}"`;
           }
         });
       }
 
-      // Proxy segment URL
+      // Segment URL
       if (!line.startsWith('#') && line.length > 0) {
         try {
           const absoluteUrl = line.startsWith('http') ? line : new URL(line, baseUrl).toString();
-          
-          // Check for ads BEFORE proxying
+
           if (this.isAdSegmentUrl(absoluteUrl)) {
-            // Also remove the preceding #EXTINF tag
             if (cleaned.length > 0 && cleaned[cleaned.length - 1].startsWith('#EXTINF')) {
               cleaned.pop();
             }
@@ -172,19 +220,17 @@ export class HlsProxyService {
             continue;
           }
 
-          line = this.buildProxyUrl(absoluteUrl, headers);
+          // FAST PATH: direct CDN URL (no proxy). SLOW PATH: proxy every segment.
+          line = proxySegments ? this.buildProxyUrl(absoluteUrl, headers, true) : absoluteUrl;
         } catch {
           // If URL is invalid, keep it as is
         }
       }
 
-      // --- DISCONTINUITY block analysis ---
       if (line === '#EXT-X-DISCONTINUITY') {
         if (inDiscontinuityBlock) {
-          // End of a discontinuity block — check if it was ads
           const hasAd = discontinuityBuffer.some(l => this.isAdSegmentUrl(l));
           if (!hasAd) {
-            // Keep the block — it was real content
             cleaned.push('#EXT-X-DISCONTINUITY');
             cleaned.push(...discontinuityBuffer);
           } else {
@@ -206,7 +252,6 @@ export class HlsProxyService {
       cleaned.push(line);
     }
 
-    // Flush any remaining discontinuity buffer
     if (discontinuityBuffer.length > 0) {
       const hasAd = discontinuityBuffer.some(l => this.isAdSegmentUrl(l));
       if (!hasAd) {
@@ -226,7 +271,6 @@ export class HlsProxyService {
 
   /**
    * Directly proxy a resource (segment, key, etc.) and stream it to the client.
-   * Handles arbitrary binary data and passes through Content-Type.
    */
   async proxyResource(targetUrl: string, headers: Record<string, string> | undefined, res: any) {
     try {
@@ -239,29 +283,28 @@ export class HlsProxyService {
         headers: reqHeaders,
         timeout: 15000,
         responseType: 'stream',
+        httpAgent,
+        httpsAgent,
       });
 
-      // Pass through relevant headers
       const contentType = response.headers['content-type'];
       if (contentType) res.setHeader('Content-Type', contentType);
-      
+
       const cacheControl = response.headers['cache-control'];
       if (cacheControl) res.setHeader('Cache-Control', cacheControl);
-      
+
       response.data.pipe(res);
     } catch (e: any) {
       this.logger.error(`Binary proxy failed for ${targetUrl}: ${e.message}`);
       throw new HttpException(
         `Failed to fetch resource: ${e.message}`,
-        e.response?.status || HttpStatus.BAD_GATEWAY
+        e.response?.status || HttpStatus.BAD_GATEWAY,
       );
     }
   }
 
   private isAdSegmentUrl(url: string): boolean {
     if (!url || url.startsWith('#')) return false;
-    // Note: If the URL is already proxied, we might need to extract the original URL or check both.
-    // However, cleanMediaPlaylist now processes lines sequentially.
     return this.AD_URL_PATTERNS.some(pattern => pattern.test(url));
   }
 }

@@ -37,6 +37,7 @@ export class StreamsController {
   async hlsProxy(
     @Query('url') url: string,
     @Query('headers') headersStr: string,
+    @Query('proxy_segs') proxySegsStr: string,
     @Res() res: Response,
     @Req() req: Request,
   ) {
@@ -56,13 +57,15 @@ export class StreamsController {
       }
     }
 
+    const proxySegments = proxySegsStr === '1' || proxySegsStr === 'true';
     const isManifest = url.includes('.m3u8') || url.includes('.m3u');
 
     try {
       if (isManifest) {
-        const cleaned = await this.hlsProxyService.getCleanManifest(url, headers);
+        const cleaned = await this.hlsProxyService.getCleanManifest(url, headers, proxySegments);
         res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
-        res.setHeader('Cache-Control', 'no-cache'); // Don't cache manifests as they are dynamic
+        // Short cache window matches Redis TTL — lets CDN / browser coalesce repeated fetches
+        res.setHeader('Cache-Control', 'public, max-age=3');
 
         res.send(cleaned);
       } else {
