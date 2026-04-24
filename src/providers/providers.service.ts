@@ -167,16 +167,22 @@ export class ProvidersService {
       ),
     ]);
 
-    if (cachedRedis?.some(l => l.isM3U8)) {
-      this.logger.log(`[Cache Hit: Redis] Returning cached streams for ${requestKey}`);
-      if (onLinkFound) cachedRedis.forEach(link => onLinkFound(link));
-      return { links: cachedRedis, scraperStatuses: [{ name: 'cache:redis', status: 'success', linksFound: cachedRedis.length, durationMs: 0 }] };
+    if (cachedRedis && cachedRedis.length > 0) {
+      const hasQualityLink = cachedRedis.some(l => l.isM3U8 || activeMediaType === 'anime' || activeMediaType === 'tv');
+      if (hasQualityLink) {
+        this.logger.log(`[Cache Hit: Redis] Returning cached streams for ${requestKey}`);
+        if (onLinkFound) cachedRedis.forEach(link => onLinkFound(link));
+        return { links: cachedRedis, scraperStatuses: [{ name: 'cache:redis', status: 'success', linksFound: cachedRedis.length, durationMs: 0 }] };
+      }
     }
 
-    if (cachedDb?.some(l => l.isM3U8)) {
-      this.logger.log(`[Cache Hit: DB] Returning cached streams for ${requestKey}`);
-      if (onLinkFound) cachedDb.forEach(link => onLinkFound(link));
-      return { links: cachedDb, scraperStatuses: [{ name: 'cache:database', status: 'success', linksFound: cachedDb.length, durationMs: 0 }] };
+    if (cachedDb && cachedDb.length > 0) {
+      const hasQualityLink = cachedDb.some(l => l.isM3U8 || activeMediaType === 'anime' || activeMediaType === 'tv');
+      if (hasQualityLink) {
+        this.logger.log(`[Cache Hit: DB] Returning cached streams for ${requestKey}`);
+        if (onLinkFound) cachedDb.forEach(link => onLinkFound(link));
+        return { links: cachedDb, scraperStatuses: [{ name: 'cache:database', status: 'success', linksFound: cachedDb.length, durationMs: 0 }] };
+      }
     }
 
     // Deduplication: join in-flight request
