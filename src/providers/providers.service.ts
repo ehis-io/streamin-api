@@ -250,8 +250,11 @@ export class ProvidersService {
           l.url.includes('master')
       );
 
-      if (hasHighQuality || (activeMediaType === 'anime' && m3u8Links.length >= 1) || m3u8Links.length >= 2) {
-        this.logger.debug(`Speculative completion: ${activeMediaType === 'anime' ? 'anime' : 'quality'} threshold reached, resolving early`);
+      if (hasHighQuality || 
+          (activeMediaType === 'anime' && m3u8Links.length >= 1) || 
+          (activeMediaType === 'tv' && allLinks.length >= 2) ||
+          m3u8Links.length >= 2) {
+        this.logger.debug(`Speculative completion: ${activeMediaType} threshold reached, resolving early`);
         speculativeResolve?.();
         return;
       }
@@ -362,7 +365,7 @@ export class ProvidersService {
               const isMirror = /streamwish|filemoon|voe\.sx|doodstream|mixdrop|upstream|9animetv|gogocdn|embtaku|vidcloud|upcloud|vidsrc|vidlink/i.test(initialLink.url);
               let resolvedLinks: (StreamLink & { provider: string })[] = [];
 
-              if (isMirror && !initialLink.isM3U8 && mirrorsScraper && activeMediaType !== 'anime') {
+              if (isMirror && !initialLink.isM3U8 && mirrorsScraper && activeMediaType !== 'anime' && activeMediaType !== 'tv') {
                 this.logger.debug(`Deep-resolving mirror: ${initialLink.url}`);
                 const deepLinks = await mirrorsScraper.getStreamLinks(initialLink.url, streamParams, getPriority());
                 const targetLinks = deepLinks.length > 0 ? deepLinks : [initialLink];
