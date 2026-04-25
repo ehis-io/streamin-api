@@ -168,7 +168,7 @@ export class ProvidersService {
     ]);
 
     if (cachedRedis && cachedRedis.length > 0) {
-      const hasQualityLink = cachedRedis.some(l => l.isM3U8 || activeMediaType === 'anime' || activeMediaType === 'tv');
+      const hasQualityLink = cachedRedis.some(l => l.isM3U8);
       if (hasQualityLink) {
         this.logger.log(`[Cache Hit: Redis] Returning cached streams for ${requestKey}`);
         if (onLinkFound) cachedRedis.forEach(link => onLinkFound(link));
@@ -177,7 +177,7 @@ export class ProvidersService {
     }
 
     if (cachedDb && cachedDb.length > 0) {
-      const hasQualityLink = cachedDb.some(l => l.isM3U8 || activeMediaType === 'anime' || activeMediaType === 'tv');
+      const hasQualityLink = cachedDb.some(l => l.isM3U8);
       if (hasQualityLink) {
         this.logger.log(`[Cache Hit: DB] Returning cached streams for ${requestKey}`);
         if (onLinkFound) cachedDb.forEach(link => onLinkFound(link));
@@ -433,7 +433,7 @@ export class ProvidersService {
               const isMirror = /streamwish|filemoon|voe\.sx|doodstream|mixdrop|upstream|9animetv|gogocdn|embtaku|vidcloud|upcloud|vidsrc|vidlink/i.test(initialLink.url);
               let resolvedLinks: (StreamLink & { provider: string })[] = [];
 
-              if (isMirror && !initialLink.isM3U8 && mirrorsScraper && activeMediaType !== 'anime' && activeMediaType !== 'tv') {
+              if (isMirror && !initialLink.isM3U8 && mirrorsScraper) {
                 this.logger.debug(`Deep-resolving mirror: ${initialLink.url}`);
                 const deepLinks = await mirrorsScraper.getStreamLinks(initialLink.url, streamParams, getPriority());
                 const targetLinks = deepLinks.length > 0 ? deepLinks : [initialLink];
