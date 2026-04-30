@@ -67,9 +67,10 @@ function determineNeedsProxy(link: StreamLink): boolean {
 
   const urlLower = link.url.toLowerCase();
 
-  // Sources known to inject server-side ads (SCTE-35 / SSAI)
+  // Sources known to inject server-side ads or block CORS on direct fetch
   const knownAdInjectors = [
     'ssaimanifest', 'dai.google', 'stitcher', 'mediatailor',
+    'vodvidl', 'videostr', 'proxy/file', 'headers=',
   ];
   if (knownAdInjectors.some(p => urlLower.includes(p))) return true;
 
@@ -171,6 +172,7 @@ export class ProvidersService {
       const hasQualityLink = cachedRedis.some(l => l.isM3U8);
       if (hasQualityLink) {
         this.logger.log(`[Cache Hit: Redis] Returning cached streams for ${requestKey}`);
+        cachedRedis.forEach(link => { link.needsProxy = determineNeedsProxy(link); });
         if (onLinkFound) cachedRedis.forEach(link => onLinkFound(link));
         return { links: cachedRedis, scraperStatuses: [{ name: 'cache:redis', status: 'success', linksFound: cachedRedis.length, durationMs: 0 }] };
       }
@@ -180,6 +182,7 @@ export class ProvidersService {
       const hasQualityLink = cachedDb.some(l => l.isM3U8);
       if (hasQualityLink) {
         this.logger.log(`[Cache Hit: DB] Returning cached streams for ${requestKey}`);
+        cachedDb.forEach(link => { link.needsProxy = determineNeedsProxy(link); });
         if (onLinkFound) cachedDb.forEach(link => onLinkFound(link));
         return { links: cachedDb, scraperStatuses: [{ name: 'cache:database', status: 'success', linksFound: cachedDb.length, durationMs: 0 }] };
       }
