@@ -567,7 +567,7 @@ export class ProvidersService {
 
   async prefetchLinks(
     items: { id: string, mediaType: 'movie' | 'tv' | 'anime', title?: string }[],
-    onLinkFound?: (id: string, link: StreamLink) => void
+    onLinkFound?: (id: string, link: StreamLink, mediaType: 'movie' | 'tv' | 'anime') => void,
   ) {
     this.logger.log(`Queueing prefetch for ${items.length} items`);
 
@@ -603,7 +603,7 @@ export class ProvidersService {
             dbEpisode || undefined,
             'sub',
             item.mediaType,
-            onLinkFound ? (link) => onLinkFound(item.id, link) : undefined,
+            onLinkFound ? (link) => onLinkFound(item.id, link, item.mediaType) : undefined,
             1
           );
         } catch (err: any) {

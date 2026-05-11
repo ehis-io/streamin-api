@@ -41,8 +41,17 @@ export class StreamsGateway implements OnGatewayConnection, OnGatewayDisconnect 
         this.logger.log(`Prefetch started via WS for ${data.items.length} items`);
 
         try {
-            await this.providersService.prefetchLinks(data.items, (id, link) => {
-                client.emit('prefetch-link', { id, link });
+            await this.providersService.prefetchLinks(data.items, (id, link, mediaType) => {
+                // Always include the season/episode the prefetch scraped for (S1E1 for TV/anime).
+                // Frontend uses this to key the cache so episode 5 doesn't accidentally play episode 1.
+                const isSeries = mediaType === 'tv' || mediaType === 'anime';
+                client.emit('prefetch-link', {
+                    id,
+                    link,
+                    mediaType,
+                    season: isSeries ? 1 : null,
+                    episode: isSeries ? 1 : null,
+                });
             });
             client.emit('prefetch-complete', { success: true });
         } catch (err: any) {
