@@ -313,10 +313,10 @@ export class ProvidersService {
           l.url.includes('master')
       );
 
+      // Instantly resolve if any M3U8 link is found to improve film load time.
       if (hasHighQuality || 
-          (activeMediaType === 'anime' && m3u8Links.length >= 1) || 
-          (activeMediaType === 'tv' && allLinks.length >= 2) ||
-          m3u8Links.length >= 2) {
+          m3u8Links.length >= 1 || 
+          (activeMediaType === 'tv' && allLinks.length >= 2)) {
         this.logger.debug(`Speculative completion: ${activeMediaType} threshold reached, resolving early`);
         speculativeResolve?.();
         return;
