@@ -330,11 +330,17 @@ export class ProvidersService {
           l.url.includes('master')
       );
 
-      // Instantly resolve if we have any good direct link, or multiple fallback iframes
+      const hasPremiumIframe = allLinks.some(l => 
+        (activeMediaType === 'movie' || activeMediaType === 'tv') && 
+        (/vidsrc|vidlink/i.test(l.url) || /vidsrc|vidlink/i.test(l.provider || ''))
+      );
+
+      // Instantly resolve if we have any good direct link, a premium iframe, or multiple fallback iframes
       if (hasHighQuality || 
           m3u8Links.length >= 1 || 
+          hasPremiumIframe ||
           allLinks.length >= 2) {
-        this.logger.debug(`Speculative completion: threshold reached (${m3u8Links.length} M3U8, ${allLinks.length} total), resolving early`);
+        this.logger.debug(`Speculative completion: threshold reached (${m3u8Links.length} M3U8, premium=${hasPremiumIframe}, ${allLinks.length} total), resolving early`);
         speculativeResolve?.();
         return;
       }
