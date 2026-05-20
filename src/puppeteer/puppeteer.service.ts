@@ -12,6 +12,7 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
   private activePages = 0;
   private readonly pagePool: { page: Page; context: any }[] = [];
   private queue: { priority: number; resolve: (val: { page: Page; context: any }) => void; reject: (err: any) => void }[] = [];
+  private activeTasks = new Set<{ pageObj: { page: Page; context: any }, priority: number }>();
 
   private readonly proxyUrls: string[];
   private proxyIndex = 0;
@@ -190,39 +191,45 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
       this.activePages++;
     }
 
+    const taskRecord = { pageObj, priority };
+    this.activeTasks.add(taskRecord);
+
     try {
       return await fn(pageObj.page);
-    } catch (error) {
+    } catch (error: any) {
       this.logger.error(`Error during Puppeteer task: ${error.message}`);
       throw error;
     } finally {
+      this.activeTasks.delete(taskRecord);
       // Reset the page instead of closing it
       try {
         const { page } = pageObj;
-        // Clean up listeners from the previous task
-        page.removeAllListeners('request');
-        // RE-ATTACH the blocking listener
-        page.on('request', (request) => {
-          const url = request.url().toLowerCase();
-          const resourceType = request.resourceType();
-          if (url.includes('.m3u8')) { request.continue(); return; }
-          const blockedResources = ['image', 'stylesheet', 'font', 'manifest', 'texttrack', 'eventsource', 'websocket', 'media', 'other'];
-          const blockedDomains = ['google-analytics.com', 'googletagmanager.com', 'doubleclick.net', 'onesignal.com', 'adsbygoogle', 'crashlytics.com', 'facebook.net'];
-          
-          if (blockedResources.includes(resourceType) || blockedDomains.some(domain => url.includes(domain))) {
-            request.abort();
-          } else {
-            request.continue();
-          }
-        });
+        if (!page.isClosed()) {
+          // Clean up listeners from the previous task
+          page.removeAllListeners('request');
+          // RE-ATTACH the blocking listener
+          page.on('request', (request) => {
+            const url = request.url().toLowerCase();
+            const resourceType = request.resourceType();
+            if (url.includes('.m3u8')) { request.continue(); return; }
+            const blockedResources = ['image', 'stylesheet', 'font', 'manifest', 'texttrack', 'eventsource', 'websocket', 'media', 'other'];
+            const blockedDomains = ['google-analytics.com', 'googletagmanager.com', 'doubleclick.net', 'onesignal.com', 'adsbygoogle', 'crashlytics.com', 'facebook.net'];
+            
+            if (blockedResources.includes(resourceType) || blockedDomains.some(domain => url.includes(domain))) {
+              request.abort().catch(() => {});
+            } else {
+              request.continue().catch(() => {});
+            }
+          });
 
-        await page.goto('about:blank');
-        const client = await (page as any).target().createCDPSession();
-        await client.send('Network.clearBrowserCookies');
-        await client.send('Network.clearBrowserCache');
+          await page.goto('about:blank');
+          const client = await (page as any).target().createCDPSession();
+          await client.send('Network.clearBrowserCookies');
+          await client.send('Network.clearBrowserCache');
 
-        this.pagePool.push(pageObj);
-      } catch (resetError) {
+          this.pagePool.push(pageObj);
+        }
+      } catch (resetError: any) {
         this.logger.warn(`Failed to reset page, closing it instead: ${resetError.message}`);
         await pageObj.context.close().catch(() => { });
       }
@@ -262,6 +269,32 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
           reject(err);
         });
       }
+    }
+  }
+
+  public abortTasksWithPriority(minPriority: number) {
+    let abortedCount = 0;
+    
+    // Clear from queue
+    this.queue = this.queue.filter(item => {
+      if (item.priority >= minPriority) {
+        item.reject(new Error('Task aborted due to higher priority resolve request'));
+        abortedCount++;
+        return false;
+      }
+      return true;
+    });
+
+    // Force close active tasks
+    for (const task of this.activeTasks) {
+      if (task.priority >= minPriority) {
+        task.pageObj.context.close().catch(() => {});
+        abortedCount++;
+      }
+    }
+
+    if (abortedCount > 0) {
+      this.logger.log(`Aborted ${abortedCount} lower priority (>=${minPriority}) tasks to prioritize user resolve`);
     }
   }
 }

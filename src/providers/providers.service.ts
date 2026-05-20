@@ -10,6 +10,7 @@ import { CircuitBreakerService } from './circuit-breaker.service';
 import axios from 'axios';
 import * as http from 'http';
 import * as https from 'https';
+import { PuppeteerService } from '../puppeteer/puppeteer.service';
 
 const httpAgent = new http.Agent({ keepAlive: true });
 const httpsAgent = new https.Agent({ keepAlive: true });
@@ -87,6 +88,7 @@ export class ProvidersService {
   private readonly activePrefetches = new Set<string>();
   private globalPrefetchCount = 0;
   private readonly MAX_GLOBAL_PREFETCH = 3; // Total background tasks allowed across all requests
+  private activeUserRequests = 0;
 
   constructor(
     @Inject(SCRAPER_TOKEN) private scrapers: Scraper[],
@@ -97,6 +99,7 @@ export class ProvidersService {
     private cacheService: StreamCacheService,
     private circuitBreaker: CircuitBreakerService,
     private configService: ConfigService,
+    private puppeteerService: PuppeteerService,
   ) {
     this.scrapers = Array.isArray(this.scrapers) ? this.scrapers : (this.scrapers ? [this.scrapers] : []);
     this.scrapers.sort((a, b) => (b.priority || 0) - (a.priority || 0));
@@ -194,6 +197,9 @@ export class ProvidersService {
       if (priority < inFlight.priority) {
         this.logger.debug(`[Priority Boost] Upgrading ${requestKey} from ${inFlight.priority} to ${priority}`);
         inFlight.priority = priority;
+        if (priority <= 0) {
+          this.puppeteerService.abortTasksWithPriority(1);
+        }
       }
       this.logger.debug(`[Deduplication] Joining in-flight request for ${requestKey}`);
       const result = await inFlight.promise;
@@ -204,6 +210,13 @@ export class ProvidersService {
     }
 
     const fetchPromise = (async () => {
+      const isUserRequest = priority <= 0;
+      if (isUserRequest) {
+        this.activeUserRequests++;
+        this.logger.debug(`[Priority System] User request started. Active user requests: ${this.activeUserRequests}. Aborting background prefetches.`);
+        this.puppeteerService.abortTasksWithPriority(1);
+      }
+
       try {
         const metadataPromise = (async () => {
           let title = '';
@@ -246,6 +259,10 @@ export class ProvidersService {
         return { links: [], scraperStatuses: [] };
       } finally {
         this.inFlightRequests.delete(requestKey);
+        if (isUserRequest) {
+          this.activeUserRequests--;
+          this.logger.debug(`[Priority System] User request finished. Active user requests: ${this.activeUserRequests}.`);
+        }
       }
     })();
 
@@ -313,11 +330,11 @@ export class ProvidersService {
           l.url.includes('master')
       );
 
-      // Instantly resolve if any M3U8 link is found to improve film load time.
+      // Instantly resolve if we have any good direct link, or multiple fallback iframes
       if (hasHighQuality || 
           m3u8Links.length >= 1 || 
-          (activeMediaType === 'tv' && allLinks.length >= 2)) {
-        this.logger.debug(`Speculative completion: ${activeMediaType} threshold reached, resolving early`);
+          allLinks.length >= 2) {
+        this.logger.debug(`Speculative completion: threshold reached (${m3u8Links.length} M3U8, ${allLinks.length} total), resolving early`);
         speculativeResolve?.();
         return;
       }
@@ -544,10 +561,9 @@ export class ProvidersService {
       speculativePromise,
       new Promise<void>((resolve) => {
         const interval = setInterval(() => {
-          // Fallback: 3s elapsed with at least 1 M3U8
-          const m3u8Count = allLinks.filter(l => l.isM3U8).length;
-          if (Date.now() - startTime > 3000 && m3u8Count >= 1) {
-            this.logger.debug(`Time-based speculative completion: ${m3u8Count} M3U8 after 3s`);
+          // Fallback: 3s elapsed with AT LEAST 1 link of any kind
+          if (Date.now() - startTime > 3000 && allLinks.length >= 1) {
+            this.logger.debug(`Time-based speculative completion: ${allLinks.length} total links after 3s`);
             clearInterval(interval);
             resolve();
           }
@@ -575,6 +591,12 @@ export class ProvidersService {
 
     const processQueue = async () => {
       while (queue.length > 0) {
+        if (this.activeUserRequests > 0) {
+          this.logger.debug(`[Prefetch Guard] Pausing prefetch because user requests (${this.activeUserRequests}) are active.`);
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          continue;
+        }
+
         if (this.globalPrefetchCount >= this.MAX_GLOBAL_PREFETCH) {
           this.logger.debug(`[Prefetch Guard] Global limit reached (${this.globalPrefetchCount}/${this.MAX_GLOBAL_PREFETCH}). Waiting...`);
           await new Promise(resolve => setTimeout(resolve, 5000));
