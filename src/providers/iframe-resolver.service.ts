@@ -7,7 +7,7 @@ const KNOWN_EMBED_PATTERNS = [
   'streamwish', 'filemoon', 'voe.sx', 'doodstream', 'mixdrop',
   'upstream', 'mp4upload', 'streamtape', 'vidoza', 'kwik',
   'rapidcloud', 'megacloud', 'vidplay', 'mycloud', 'vizcloud',
-  'rabbitstream', 'dokicloud', '9animetv', 'gogocdn', 'embtaku', 'vidcloud', 'upcloud', 'vidsrc', 'vidlink',
+  'rabbitstream', 'dokicloud', '9animetv', 'gogocdn', 'embtaku', 'vidcloud', 'upcloud', 'vidsrc', 'vidlink', 'vodvidl',
 ];
 
 /** Ad/tracking domains to block during resolution */

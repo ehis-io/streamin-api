@@ -456,7 +456,7 @@ export class ProvidersService {
             await Promise.all(links.map(async (initialLink) => {
               if (isTimedOut) return;
 
-              const isMirror = /streamwish|filemoon|voe\.sx|doodstream|mixdrop|upstream|9animetv|gogocdn|embtaku|vidcloud|upcloud|vidsrc|vidlink/i.test(initialLink.url);
+              const isMirror = /streamwish|filemoon|voe\.sx|doodstream|mixdrop|upstream|9animetv|gogocdn|embtaku|vidcloud|upcloud|vidsrc|vidlink|vodvidl/i.test(initialLink.url);
               let resolvedLinks: (StreamLink & { provider: string })[] = [];
 
               if (isMirror && !initialLink.isM3U8 && mirrorsScraper) {
