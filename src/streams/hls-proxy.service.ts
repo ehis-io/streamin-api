@@ -2,9 +2,14 @@ import { Injectable, Logger, HttpException, HttpStatus, Inject } from '@nestjs/c
 import { ConfigService } from '@nestjs/config';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import type { Cache } from 'cache-manager';
-import axios from 'axios';
+import axios, { AxiosResponse } from 'axios';
 import * as http from 'http';
 import * as https from 'https';
+import { PrismaService } from '../prisma/prisma.service';
+
+// Origin responses that prove the cached URL is dead — never recoverable by retrying.
+// 403/410 = signed/IP-bound token revoked; 404 = removed; 451 = blocked.
+const DEAD_URL_STATUSES = new Set([403, 404, 410, 451]);
 
 // Shared keep-alive agents with higher socket limits for HLS proxy throughput.
 // A single movie can issue 500-1000 parallel segment requests — defaults (maxSockets=Infinity
@@ -41,10 +46,29 @@ export class HlsProxyService {
   constructor(
     private configService: ConfigService,
     @Inject(CACHE_MANAGER) private cacheManager: Cache,
+    private prisma: PrismaService,
   ) {
     const port = this.configService.get<number>('PORT', 4001);
     const apiUrl = this.configService.get<string>('API_URL', `http://localhost:${port}`);
     this.proxyBaseUrl = `${apiUrl}/api/v1/streams/hls-proxy`;
+  }
+
+  /**
+   * Drop a known-dead URL from manifest cache + DB so the next /streams request
+   * re-scrapes instead of replaying the same broken URL. Fire-and-forget — never
+   * blocks the response to the user.
+   */
+  private invalidateDeadUrl(url: string): void {
+    this.cacheManager.del(`hls:manifest:p:${url}`).catch(() => {});
+    this.cacheManager.del(`hls:manifest:d:${url}`).catch(() => {});
+    (this.prisma as any).streamedLink
+      .deleteMany({ where: { url } })
+      .then((r: { count: number }) => {
+        if (r.count > 0) {
+          this.logger.warn(`Purged ${r.count} dead streamedLink(s): ${url.substring(0, 100)}`);
+        }
+      })
+      .catch((e: any) => this.logger.warn(`Failed to purge dead link: ${e.message}`));
   }
 
   /**
@@ -89,13 +113,23 @@ export class HlsProxyService {
       ...headers,
     };
 
-    const response = await axios.get(m3u8Url, {
-      headers: reqHeaders,
-      timeout: 10000,
-      responseType: 'text',
-      httpAgent,
-      httpsAgent,
-    });
+    let response: AxiosResponse<string>;
+    try {
+      response = await axios.get<string>(m3u8Url, {
+        headers: reqHeaders,
+        timeout: 10000,
+        responseType: 'text',
+        httpAgent,
+        httpsAgent,
+      });
+    } catch (e: any) {
+      const status = e.response?.status;
+      if (status && DEAD_URL_STATUSES.has(status)) {
+        this.invalidateDeadUrl(m3u8Url);
+        throw new HttpException(`Origin returned ${status} for ${m3u8Url}`, status);
+      }
+      throw e;
+    }
 
     const raw: string = response.data;
     // Handle redirects for accurate relative URL resolution
@@ -295,10 +329,14 @@ export class HlsProxyService {
 
       response.data.pipe(res);
     } catch (e: any) {
+      const status = e.response?.status;
       this.logger.error(`Binary proxy failed for ${targetUrl}: ${e.message}`);
+      if (status && DEAD_URL_STATUSES.has(status)) {
+        this.invalidateDeadUrl(targetUrl);
+      }
       throw new HttpException(
         `Failed to fetch resource: ${e.message}`,
-        e.response?.status || HttpStatus.BAD_GATEWAY,
+        status || HttpStatus.BAD_GATEWAY,
       );
     }
   }
