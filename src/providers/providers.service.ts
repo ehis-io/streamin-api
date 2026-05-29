@@ -119,6 +119,47 @@ export class ProvidersService {
     return this.circuitBreaker.getAllHealth();
   }
 
+  /**
+   * Probe each cached link in parallel and emit only the ones that actually respond.
+   * Non-M3U8 (iframe) links pass through optimistically — we can't HEAD-check playback
+   * inside a sandboxed iframe, so we let the frontend's manual fallback handle those.
+   *
+   * Dead M3U8 links are dropped silently and fire-and-forget purged from the DB so the
+   * next request re-scrapes instead of serving the same dead URL.
+   */
+  private async emitProbedLinks(
+    links: StreamLink[],
+    onLinkFound?: (link: StreamLink) => void,
+  ): Promise<StreamLink[]> {
+    const live: StreamLink[] = [];
+
+    await Promise.all(
+      links.map(async (link) => {
+        link.needsProxy = determineNeedsProxy(link);
+
+        if (!link.isM3U8) {
+          // Iframe / non-HLS: pass through. Frontend's manual switch covers failures.
+          live.push(link);
+          onLinkFound?.(link);
+          return;
+        }
+
+        const ok = await this.validationService.validateStream(link.url, link.headers);
+        if (ok) {
+          live.push(link);
+          onLinkFound?.(link);
+        } else {
+          this.logger.warn(`Dead cached M3U8 dropped: ${link.url.substring(0, 100)}`);
+          (this.prisma as any).streamedLink
+            .deleteMany({ where: { url: link.url } })
+            .catch((e: any) => this.logger.debug(`Failed to purge dead link: ${e.message}`));
+        }
+      }),
+    );
+
+    return live;
+  }
+
   async findStreamLinks(
     id: string,
     seasonParam?: number,
@@ -174,20 +215,24 @@ export class ProvidersService {
     if (cachedRedis && cachedRedis.length > 0) {
       const hasQualityLink = cachedRedis.some(l => l.isM3U8);
       if (hasQualityLink) {
-        this.logger.log(`[Cache Hit: Redis] Returning cached streams for ${requestKey}`);
-        cachedRedis.forEach(link => { link.needsProxy = determineNeedsProxy(link); });
-        if (onLinkFound) cachedRedis.forEach(link => onLinkFound(link));
-        return { links: cachedRedis, scraperStatuses: [{ name: 'cache:redis', status: 'success', linksFound: cachedRedis.length, durationMs: 0 }] };
+        this.logger.log(`[Cache Hit: Redis] Validating cached streams for ${requestKey}`);
+        const live = await this.emitProbedLinks(cachedRedis, onLinkFound);
+        if (live.length > 0) {
+          return { links: live, scraperStatuses: [{ name: 'cache:redis', status: 'success', linksFound: live.length, durationMs: 0 }] };
+        }
+        this.logger.warn(`[Cache Hit: Redis] All cached links dead for ${requestKey} — re-scraping`);
       }
     }
 
     if (cachedDb && cachedDb.length > 0) {
       const hasQualityLink = cachedDb.some(l => l.isM3U8);
       if (hasQualityLink) {
-        this.logger.log(`[Cache Hit: DB] Returning cached streams for ${requestKey}`);
-        cachedDb.forEach(link => { link.needsProxy = determineNeedsProxy(link); });
-        if (onLinkFound) cachedDb.forEach(link => onLinkFound(link));
-        return { links: cachedDb, scraperStatuses: [{ name: 'cache:database', status: 'success', linksFound: cachedDb.length, durationMs: 0 }] };
+        this.logger.log(`[Cache Hit: DB] Validating cached streams for ${requestKey}`);
+        const live = await this.emitProbedLinks(cachedDb, onLinkFound);
+        if (live.length > 0) {
+          return { links: live, scraperStatuses: [{ name: 'cache:database', status: 'success', linksFound: live.length, durationMs: 0 }] };
+        }
+        this.logger.warn(`[Cache Hit: DB] All cached links dead for ${requestKey} — re-scraping`);
       }
     }
 

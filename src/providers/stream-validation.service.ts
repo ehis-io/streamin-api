@@ -29,10 +29,11 @@ export class StreamValidationService {
 
     const domain = new URL(url).hostname;
 
-    // Auto-accept M3U8 patterns — these are assumed valid since they were actively extracted
+    // M3U8 manifests: dedicated fast-probe path. Cached URLs often have signed/IP-bound
+    // tokens that expire — a HEAD with the captured Referer tells us in ~200ms whether
+    // the CDN will still serve it to the browser.
     if (url.includes('.m3u8') || url.includes('.m3u')) {
-      this.logger.debug(`Auto-accepting M3U8 link: ${url.substring(0, 80)}`);
-      return true;
+      return this.probeM3U8(url, headers);
     }
 
     const isRestricted = domain.includes('vidsrc') ||
@@ -73,6 +74,41 @@ export class StreamValidationService {
         this.validationQueues.set(domain, queue);
       }
     });
+  }
+
+  /**
+   * Fast HEAD probe for M3U8 manifests. Uses the captured headers (Referer/Origin)
+   * verbatim — those are what the original embed sent, and the CDN's token check
+   * usually keys off them. 600ms timeout: if the manifest can't HEAD in that window,
+   * segments won't play smoothly anyway.
+   */
+  private async probeM3U8(url: string, headers?: Record<string, string>): Promise<boolean> {
+    const reqHeaders = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+      ...(headers || {}),
+    };
+    try {
+      const res = await axios.head(url, { headers: reqHeaders, timeout: 600 });
+      return res.status >= 200 && res.status < 400;
+    } catch (e: any) {
+      const status = e.response?.status;
+      // 405 means HEAD isn't allowed but the URL might still be live — try a tiny ranged GET.
+      if (status === 405) {
+        try {
+          const res = await axios.get(url, {
+            headers: { ...reqHeaders, Range: 'bytes=0-1023' },
+            timeout: 800,
+            responseType: 'text',
+            validateStatus: () => true,
+          });
+          return res.status >= 200 && res.status < 400;
+        } catch {
+          return false;
+        }
+      }
+      this.logger.debug(`M3U8 probe failed (${status ?? e.code ?? 'err'}) for ${url.substring(0, 80)}`);
+      return false;
+    }
   }
 
   private processQueue(domain: string) {
