@@ -8,74 +8,81 @@ datasource db {
 }
 
 model Movie {
-  id          String     @id @default(auto()) @map("_id") @db.ObjectId
-  tmdbId      Int        @unique
-  title       String
-  type        String     // "movie" or "tv"
-  providers   Provider[]
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
+  id        String     @id @default(auto()) @map("_id") @db.ObjectId
+  tmdbId    Int        @unique
+  title     String
+  type      String // "movie" or "tv"
+  providers Provider[]
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
 }
 
 model Provider {
-  id          String   @id @default(auto()) @map("_id") @db.ObjectId
-  movieId     String   @db.ObjectId
-  movie       Movie    @relation(fields: [movieId], references: [id])
-  name        String   // "YouTube", "Vimeo", etc.
-  embedUrl    String
-  priority    Int      @default(0)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  movieId   String   @db.ObjectId
+  movie     Movie    @relation(fields: [movieId], references: [id])
+  name      String // "YouTube", "Vimeo", etc.
+  embedUrl  String
+  priority  Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model Anime {
-  id          String          @id @default(auto()) @map("_id") @db.ObjectId
-  malId       Int             @unique
-  title       String
-  providers   AnimeProvider[]
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
+  id        String          @id @default(auto()) @map("_id") @db.ObjectId
+  malId     Int             @unique
+  title     String
+  providers AnimeProvider[]
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
 }
 
 model AnimeProvider {
-  id          String   @id @default(auto()) @map("_id") @db.ObjectId
-  animeId     String   @db.ObjectId
-  anime       Anime    @relation(fields: [animeId], references: [id])
-  name        String
-  embedUrl    String
-  priority    Int      @default(0)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  animeId   String   @db.ObjectId
+  anime     Anime    @relation(fields: [animeId], references: [id])
+  name      String
+  embedUrl  String
+  priority  Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
-
 model StreamedLink {
-  id          String   @id @default(auto()) @map("_id") @db.ObjectId
-  tmdbId      Int?
-  malId       Int?
-  season      Int?
-  episode     Int?
-  url         String
-  quality     String?
-  isM3U8      Boolean  @default(false)
-  provider    String
-  headers     String?  // JSON stringified headers
-  type        String?  // "sub" or "dub"
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  tmdbId    Int?
+  malId     Int?
+  season    Int?
+  episode   Int?
+  url       String
+  quality   String?
+  isM3U8    Boolean  @default(false)
+  provider  String
+  headers   String? // JSON stringified headers
+  type      String? // "sub" or "dub"
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([tmdbId, season, episode])
   @@index([malId, episode])
+  // Cache-hit lookups filter by (tmdbId|malId, season, episode, type) — adding `type`
+  // as a trailing field on the compound index lets Mongo serve the full predicate
+  // from a single index pass instead of post-filtering.
+  @@index([tmdbId, season, episode, type])
+  @@index([malId, season, episode, type])
+  // On-demand purge-by-URL (hls-proxy invalidateDeadUrl + providers.emitProbedLinks)
+  // — without this, every 4xx triggers a full collection scan.
+  @@index([url])
 }
 
 model ProviderMapping {
-  id          String   @id @default(auto()) @map("_id") @db.ObjectId
-  tmdbId      Int?
-  malId       Int?
-  provider    String
-  externalUrl String
-  mappingKey  String   @unique // Format: "tmdb:id:provider" or "mal:id:provider"
-  episodeOffset Int    @default(0)
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  tmdbId        Int?
+  malId         Int?
+  provider      String
+  externalUrl   String
+  mappingKey    String   @unique // Format: "tmdb:id:provider" or "mal:id:provider"
+  episodeOffset Int      @default(0)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -84,21 +91,21 @@ model ProviderMapping {
 }
 
 model Playlist {
-  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  id          String         @id @default(auto()) @map("_id") @db.ObjectId
   name        String
   description String?
   items       PlaylistItem[]
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
 }
 
 model PlaylistItem {
-  id          String   @id @default(auto()) @map("_id") @db.ObjectId
-  playlistId  String   @db.ObjectId
-  playlist    Playlist @relation(fields: [playlistId], references: [id])
-  tmdbId      Int?
-  malId       Int?
-  type        String   // "movie", "tv", "anime"
-  title       String
-  posterPath  String?
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  playlistId String   @db.ObjectId
+  playlist   Playlist @relation(fields: [playlistId], references: [id])
+  tmdbId     Int?
+  malId      Int?
+  type       String // "movie", "tv", "anime"
+  title      String
+  posterPath String?
 }
