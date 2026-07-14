@@ -180,6 +180,12 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
     } else if (this.activePages < capacityLimit) {
       this.activePages++;
       pageObj = await this.createNewPage();
+      if (!pageObj) {
+        // Creation failed — roll back the reservation. Otherwise the queue path
+        // below re-increments on resolve, permanently leaking a slot (+1 per
+        // failure) until every request eventually deadlocks in the queue.
+        this.activePages--;
+      }
     }
 
     if (!pageObj) {
@@ -257,15 +263,17 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
       if (pageObj) {
         resolve(pageObj);
       } else {
+        // The waiting withPage() increments activePages only when this promise
+        // RESOLVES (see the queue block there). On failure nothing was counted
+        // for this item, so we must NOT decrement here — doing so drained a slot
+        // that belonged to another in-flight task.
         this.createNewPage().then(p => {
           if (p) {
             resolve(p);
           } else {
-            this.activePages--;
             reject(new Error("Puppeteer connection timeout: could not allocate a new browser page."));
           }
         }).catch(err => {
-          this.activePages--;
           reject(err);
         });
       }

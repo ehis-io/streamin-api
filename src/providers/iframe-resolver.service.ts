@@ -79,25 +79,27 @@ export class IframeResolverService {
             earlyResolveFn?.();
           }
 
-          request.continue();
+          // Guard continue/abort: if the request was already handled (e.g. during
+          // navigation teardown) Puppeteer throws, surfacing as an unhandled rejection.
+          request.continue().catch(() => {});
           return;
         }
 
         // Always allow .mpd and .mp4
         if (reqUrlLower.includes('.mpd') || reqUrlLower.includes('.mp4')) {
-          request.continue();
+          request.continue().catch(() => {});
           return;
         }
 
         // Block ads aggressively
         if (AD_DOMAINS.some(d => reqUrlLower.includes(d))) {
-          request.abort();
+          request.abort().catch(() => {});
           return;
         }
 
         // Block non-essential resource types
         if (['image', 'stylesheet', 'font', 'media', 'manifest', 'texttrack'].includes(resourceType)) {
-          request.abort();
+          request.abort().catch(() => {});
           return;
         }
 
@@ -106,15 +108,17 @@ export class IframeResolverService {
           reqUrlLower.includes('pop') || reqUrlLower.includes('ads') || reqUrlLower.includes('track') ||
           reqUrlLower.includes('syndication') || reqUrlLower.includes('analytics')
         )) {
-          request.abort();
+          request.abort().catch(() => {});
           return;
         }
 
-        request.continue();
+        request.continue().catch(() => {});
       });
 
-      // Also capture MP4 video from responses (content-type based)
-      page.on('response', async (response) => {
+      // Also capture MP4 video from responses (content-type based).
+      // Named handler so it can be removed on the way out — the page is pooled and
+      // reused, so leaving it attached stacks a new response listener per resolve().
+      const onResponse = (response: any) => {
         const url = response.url();
         const contentType = response.headers()['content-type'] || '';
 
@@ -131,7 +135,8 @@ export class IframeResolverService {
             this.logger.debug(`Captured MP4: ${url.substring(0, 100)}`);
           }
         }
-      });
+      };
+      page.on('response', onResponse);
 
       try {
         await page.goto(embedUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
@@ -166,6 +171,9 @@ export class IframeResolverService {
         }
       } catch (e: any) {
         this.logger.warn(`Navigation failed for ${embedUrl}: ${e.message}`);
+      } finally {
+        // Detach our response listener so it doesn't accumulate on the pooled page.
+        page.off('response', onResponse);
       }
 
       this.logger.log(`Resolved ${foundLinks.length} links from embed: ${embedUrl}`);

@@ -546,12 +546,23 @@ export class ProvidersService {
                     }
 
                     if (isValid) {
-                      await this.cacheService.saveToDatabase(link, activeMediaType!, tmdbId, malId, dbSeason, dbEpisode, type);
+                      // Persist under the LINK's own sub/dub tag (e.g. GogoAnime returns
+                      // both), not the request type — otherwise a dub link gets stored as
+                      // sub and served to the wrong audience / misses the dub cache.
+                      const linkType = (link as any).type || type;
+                      await this.cacheService.saveToDatabase(link, activeMediaType!, tmdbId, malId, dbSeason, dbEpisode, linkType);
                     } else {
                       this.logger.warn(`Background validation rejected: ${link.url.substring(0, 100)}...`);
                       // Remove from in-memory list so the Redis cache reflects only valid links
                       const idx = allLinks.findIndex(l => l.url === link.url);
-                      if (idx >= 0) allLinks.splice(idx, 1);
+                      if (idx >= 0) {
+                        allLinks.splice(idx, 1);
+                        // Re-write the Redis snapshot so the dead link isn't served for
+                        // the next 24h (validation completes after the initial saveToRedis).
+                        if (allLinks.length > 0) {
+                          this.cacheService.saveToRedis(cacheKey, allLinks).catch(() => {});
+                        }
+                      }
                     }
                   } catch (valError: any) {
                     this.logger.error(`Validation crashed for ${link.url}: ${valError.message}`);
@@ -607,26 +618,30 @@ export class ProvidersService {
     // Race between: all scrapers finishing, speculative completion, or timeout
     const startTime = Date.now();
 
+    // Held outside the Promise so it can be cleared once the race settles. Previously,
+    // if Promise.all won the race with zero links, isTimedOut never flipped (the overall
+    // timeout is cleared just below) and this interval ticked every 500ms forever.
+    let fallbackInterval: ReturnType<typeof setInterval> | null = null;
+
     await Promise.race([
       Promise.all(scraperPromises),
       speculativePromise,
       new Promise<void>((resolve) => {
-        const interval = setInterval(() => {
+        fallbackInterval = setInterval(() => {
           // Fallback: 3s elapsed with AT LEAST 1 link of any kind
           if (Date.now() - startTime > 3000 && allLinks.length >= 1) {
             this.logger.debug(`Time-based speculative completion: ${allLinks.length} total links after 3s`);
-            clearInterval(interval);
             resolve();
           }
           if (isTimedOut) {
             this.logger.debug(`Overall timeout reached (${this.STREAM_TIMEOUT_MS}ms)`);
-            clearInterval(interval);
             resolve();
           }
         }, 500);
       })
     ]);
 
+    if (fallbackInterval) clearInterval(fallbackInterval);
     clearTimeout(timeoutHandle);
 
     return { links: allLinks, scraperStatuses };
@@ -690,7 +705,9 @@ export class ProvidersService {
       }
     };
 
-    // Process prefetch queue serially — user requests always get priority via reserved Puppeteer slots
-    processQueue();
+    // Process prefetch queue serially — user requests always get priority via reserved Puppeteer slots.
+    // Await it so callers (e.g. the WS gateway) only emit `prefetch-complete` once the
+    // queue has actually drained, instead of immediately.
+    await processQueue();
   }
 }

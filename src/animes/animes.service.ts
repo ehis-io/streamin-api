@@ -102,25 +102,27 @@ export class AnimesService {
 
         if (data && (data as any).data) {
             results = (data as any).data.map((item: any) => ({
+                // Spread the raw item FIRST so our mapped fields win — otherwise `...item`
+                // clobbered `synopsis` back to the un-cleaned upstream text.
+                ...item,
                 id: item.mal_id,
                 title: item.title,
                 poster_path: item.images?.jpg?.large_image_url,
                 vote_average: item.score,
                 release_date: item.aired?.from ? item.aired.from.split('T')[0] : null,
                 synopsis: this.cleanSynopsis(item.synopsis),
-                // Keep original data just in case
-                ...item
             }));
         }
 
         // Map Jikan response to match TMDB structure expected by frontend
         // Jikan returns { data: [], pagination: {} }
         // Frontend expects { results: [], page: number, total_pages: number }
+        // Optional-chain `data` itself: a null/undefined upstream response must not throw.
         return {
             results: results,
-            page: (data as any).pagination?.current_page || 1,
-            total_pages: (data as any).pagination?.last_visible_page || 1,
-            total_results: (data as any).pagination?.items?.total || 0
+            page: (data as any)?.pagination?.current_page || 1,
+            total_pages: (data as any)?.pagination?.last_visible_page || 1,
+            total_results: (data as any)?.pagination?.items?.total || 0
         };
     }
 }

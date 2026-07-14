@@ -1,4 +1,4 @@
-import { Controller, Get, Query, Param } from '@nestjs/common';
+import { Controller, Get, Query, Param, ParseIntPipe } from '@nestjs/common';
 import { MoviesService } from './movies.service';
 import { SearchDto } from '../common/dto/search.dto';
 import { DiscoverDto } from '../common/dto/discover.dto';
@@ -31,12 +31,12 @@ export class MoviesController {
   }
 
   @Get(':id/recommendations')
-  getRecommendations(@Param('id') id: string) {
-    return this.moviesService.getRecommendations(+id);
+  getRecommendations(@Param('id', ParseIntPipe) id: number) {
+    return this.moviesService.getRecommendations(id);
   }
 
   @Get(':id')
-  getDetails(@Param('id') id: string) {
-    return this.moviesService.getDetails(+id);
+  getDetails(@Param('id', ParseIntPipe) id: number) {
+    return this.moviesService.getDetails(id);
   }
 }

@@ -21,7 +21,10 @@ export class TmdbService {
   }
 
   private async getCachedRequest(key: string, url: string, params: any, ttl: number = 604800000) {
-    const cacheKey = key.replace(/[:\s?&]/g, '_');
+    // Keep ':' as the structural separator (Redis-safe) and only neutralize chars
+    // that would collide distinct inputs. The old rule mapped ':' AND whitespace to
+    // '_', so "star wars" and "star:wars" produced the same key.
+    const cacheKey = key.replace(/\s+/g, '+').replace(/[?&#]/g, '_');
     const cached = await this.cacheManager.get(cacheKey);
     if (cached) {
       return this.filterFutureContent(cached);
@@ -133,19 +136,14 @@ export class TmdbService {
   }
 
   async discover(type: 'movie' | 'tv' = 'movie', params: any = {}) {
-    // Generate a simpler cache key for discovery to prevent massive key proliferation
-    const {
-      page = 1,
-      with_genres = '',
-      sort_by = 'popularity.desc',
-      'primary_release_date.gte': dateGte = '',
-      'primary_release_date.lte': dateLte = '',
-      'first_air_date.gte': airDateGte = '',
-      'first_air_date.lte': airDateLte = '',
-      'vote_average.gte': voteGte = ''
-    } = params;
-
-    const cacheKey = `discover:${type}:p${page}:g${with_genres}:s${sort_by}:d${dateGte}-${dateLte}:ad${airDateGte}-${airDateLte}:v${voteGte}`;
+    // Build the cache key from ALL forwarded params (sorted for stability). The old
+    // key used a hand-picked subset while the full params object was sent to TMDB, so
+    // e.g. with_original_language=en vs =ja shared a key and served each other's results.
+    const stableParams = Object.keys(params)
+      .sort()
+      .map((k) => `${k}=${params[k]}`)
+      .join(':');
+    const cacheKey = `discover:${type}:${stableParams}`;
     const data = await this.getCachedRequest(cacheKey, `${this.baseUrl}/discover/${type}`, params);
     if (data?.results) {
       data.results = data.results.map((item: any) => ({ ...item, media_type: type }));
