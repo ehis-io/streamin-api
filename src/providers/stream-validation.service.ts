@@ -181,11 +181,13 @@ export class StreamValidationService {
       });
 
     } catch (e: any) {
-      if (e.response?.status === 429 && attempt <= this.MAX_RETRIES) {
-        this.logger.warn(`Rate limited (429) by ${domain}. Retrying in ${this.RETRY_DELAY_MS}ms (Attempt ${attempt}/${this.MAX_RETRIES})`);
+      if (e.response?.status === 429) {
+        // Set the cooldown and fail fast. Retrying in-call held a concurrency slot
+        // for RETRY_DELAY_MS × MAX_RETRIES while bypassing the very cooldown we just
+        // set (it's only checked on entry), starving other links for this domain.
+        this.logger.warn(`Rate limited (429) by ${domain}. Cooling down for ${this.COOL_DOWN_MS}ms.`);
         this.coolingDownDomains.set(domain, Date.now() + this.COOL_DOWN_MS);
-        await new Promise(resolve => setTimeout(resolve, this.RETRY_DELAY_MS));
-        return this.executeValidation(url, headers, attempt + 1);
+        return false;
       }
 
       this.logger.debug(`Stream validation failed for ${url}: ${e.message}`);

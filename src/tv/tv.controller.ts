@@ -1,4 +1,4 @@
-import { Controller, Get, Query, Param } from '@nestjs/common';
+import { Controller, Get, Query, Param, ParseIntPipe } from '@nestjs/common';
 import { TvService } from './tv.service';
 import { SearchDto } from '../common/dto/search.dto';
 import { DiscoverDto } from '../common/dto/discover.dto';
@@ -31,17 +31,17 @@ export class TvController {
   }
 
   @Get(':id/recommendations')
-  getRecommendations(@Param('id') id: string) {
-    return this.tvService.getRecommendations(+id);
+  getRecommendations(@Param('id', ParseIntPipe) id: number) {
+    return this.tvService.getRecommendations(id);
   }
 
   @Get(':id')
-  getDetails(@Param('id') id: string) {
-    return this.tvService.getDetails(+id);
+  getDetails(@Param('id', ParseIntPipe) id: number) {
+    return this.tvService.getDetails(id);
   }
 
   @Get(':id/season/:season')
-  getSeasonDetails(@Param('id') id: string, @Param('season') season: string) {
-    return this.tvService.getSeasonDetails(+id, +season);
+  getSeasonDetails(@Param('id', ParseIntPipe) id: number, @Param('season', ParseIntPipe) season: number) {
+    return this.tvService.getSeasonDetails(id, season);
   }
 }

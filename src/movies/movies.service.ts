@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { TmdbService } from '../tmdb/tmdb.service';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -19,8 +19,16 @@ export class MoviesService {
 
   async getDetails(id: number) {
     const tmdbData = await this.tmdbService.getDetails(id);
-    const dbData = await this.prismaService.movie.findUnique({
-      where: { tmdbId: id },
+    // filterFutureContent returns null for unreleased titles — surface a real 404
+    // instead of a `{ localProviders: [] }` stub with no id/title/overview.
+    if (!tmdbData || !tmdbData.id) {
+      throw new NotFoundException('Movie not found or not yet released');
+    }
+
+    // tmdbId is globally unique across movies AND tv, so filter by type to avoid
+    // returning a TV record's providers for a movie request (and vice-versa).
+    const dbData = await this.prismaService.movie.findFirst({
+      where: { tmdbId: id, type: 'movie' },
       include: { providers: true },
     });
 

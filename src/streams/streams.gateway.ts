@@ -38,6 +38,12 @@ export class StreamsGateway implements OnGatewayConnection, OnGatewayDisconnect 
         @MessageBody() data: { items: { id: string, mediaType: 'movie' | 'tv' | 'anime', title?: string }[] },
         @ConnectedSocket() client: Socket,
     ) {
+        // WS payloads bypass the HTTP ValidationPipe, so validate the shape here.
+        if (!data || !Array.isArray(data.items) || data.items.length === 0) {
+            client.emit('prefetch-complete', { success: false, error: 'items must be a non-empty array' });
+            return;
+        }
+
         this.logger.log(`Prefetch started via WS for ${data.items.length} items`);
 
         try {

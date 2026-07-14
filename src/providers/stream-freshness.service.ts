@@ -37,6 +37,19 @@ export class StreamFreshnessService implements OnModuleInit {
       const staleThreshold = new Date(Date.now() - this.STALE_THRESHOLD_DAYS * 24 * 60 * 60 * 1000);
       const expiredThreshold = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
+      // Hard-purge M3U8 links past their 7-day TTL. They're already filtered out at
+      // read time, but nothing deleted them, so the table grew unbounded.
+      try {
+        const expired = await (this.prisma as any).streamedLink.deleteMany({
+          where: { isM3U8: true, createdAt: { lt: expiredThreshold } },
+        });
+        if (expired.count > 0) {
+          this.logger.log(`Purged ${expired.count} expired (>7d) M3U8 link(s)`);
+        }
+      } catch (e: any) {
+        this.logger.warn(`Failed to purge expired M3U8 links: ${e.message}`);
+      }
+
       // Find M3U8 links that are between 3-7 days old
       const staleLinks = await (this.prisma as any).streamedLink.findMany({
         where: {

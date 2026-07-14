@@ -24,7 +24,11 @@ export class StreamsController {
 
   @Post('prefetch')
   async prefetch(@Body() data: PrefetchStreamsDto) {
-    this.providersService.prefetchLinks(data.items);
+    // Fire-and-forget, but attach a rejection handler so a failed prefetch can't
+    // surface as an unhandled promise rejection.
+    Promise.resolve(this.providersService.prefetchLinks(data.items)).catch((err) =>
+      this.logger.error(`Prefetch failed: ${err?.message || err}`),
+    );
     return { success: true, message: 'Prefetch started' };
   }
 
@@ -112,7 +116,15 @@ export class StreamsController {
    * DELETE /api/v1/streams/cache/localhost
    */
   @Delete('cache/localhost')
-  async purgeLocalhostCache() {
+  async purgeLocalhostCache(@Req() req: Request) {
+    // Destructive (deleteMany + full Redis flush) — require an admin key so it
+    // can't be triggered anonymously. Fails closed if ADMIN_API_KEY is unset.
+    const adminKey = process.env.ADMIN_API_KEY;
+    const provided = (req.headers['x-admin-key'] as string) || '';
+    if (!adminKey || provided !== adminKey) {
+      throw new HttpException('Forbidden', HttpStatus.FORBIDDEN);
+    }
+
     this.logger.warn('Admin: Purging all localhost-cached stream links...');
 
     // 1. Delete from MongoDB - Deep purge of all stale patterns

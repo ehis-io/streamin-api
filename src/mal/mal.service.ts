@@ -97,7 +97,10 @@ export class MALService {
         const sortByParam = params.sort_by || 'popularity.desc';
         const [sortField, sortDirection] = sortByParam.split('.');
 
-        let orderBy = 'popularity';
+        // MAL's `popularity` is an inverted RANK (1 = most popular), so sorting it
+        // desc returns the LEAST popular. Use `members` (higher = more popular)
+        // instead, so `popularity.desc` correctly yields the most popular first.
+        let orderBy = 'members';
         let sort = sortDirection || 'desc';
 
         if (sortField === 'vote_average') {

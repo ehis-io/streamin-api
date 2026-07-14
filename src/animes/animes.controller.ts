@@ -1,4 +1,4 @@
-import { Controller, Get, Query, Param } from '@nestjs/common';
+import { Controller, Get, Query, Param, ParseIntPipe } from '@nestjs/common';
 import { AnimesService } from './animes.service';
 import { SearchDto } from '../common/dto/search.dto';
 import { DiscoverDto } from '../common/dto/discover.dto';
@@ -36,17 +36,17 @@ export class AnimesController {
     }
 
     @Get(':id/recommendations')
-    getRecommendations(@Param('id') id: string) {
-        return this.animesService.getRecommendations(+id);
+    getRecommendations(@Param('id', ParseIntPipe) id: number) {
+        return this.animesService.getRecommendations(id);
     }
 
     @Get(':id/episodes')
-    getEpisodes(@Param('id') id: string) {
-        return this.animesService.getEpisodes(+id);
+    getEpisodes(@Param('id', ParseIntPipe) id: number) {
+        return this.animesService.getEpisodes(id);
     }
 
     @Get(':id')
-    getDetails(@Param('id') id: string) {
-        return this.animesService.getDetails(+id);
+    getDetails(@Param('id', ParseIntPipe) id: number) {
+        return this.animesService.getDetails(id);
     }
 }

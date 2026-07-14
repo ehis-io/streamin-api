@@ -51,14 +51,21 @@ export class CircuitBreakerService {
         health.state = 'half-open';
         this.halfOpenAttempts.set(scraperName, 0);
         this.logger.log(`Circuit for ${scraperName} moved to half-open after ${Math.round(elapsed / 1000)}s`);
-        return true;
+        // fall through to the half-open admission logic so this probe is counted
+      } else {
+        return false;
       }
-      return false;
     }
 
-    // half-open: allow limited attempts
+    // half-open: admit at most HALF_OPEN_MAX_ATTEMPTS probes, counting EACH admission.
+    // Previously attempts were only bumped in recordFailure, so N concurrent callers
+    // all read attempts=0 and hammered a still-broken provider simultaneously.
     const attempts = this.halfOpenAttempts.get(scraperName) || 0;
-    return attempts < this.HALF_OPEN_MAX_ATTEMPTS;
+    if (attempts < this.HALF_OPEN_MAX_ATTEMPTS) {
+      this.halfOpenAttempts.set(scraperName, attempts + 1);
+      return true;
+    }
+    return false;
   }
 
   recordSuccess(scraperName: string, durationMs: number): void {
@@ -88,13 +95,11 @@ export class CircuitBreakerService {
     health.lastFailureTime = Date.now();
 
     if (health.state === 'half-open') {
-      const attempts = (this.halfOpenAttempts.get(scraperName) || 0) + 1;
-      this.halfOpenAttempts.set(scraperName, attempts);
-
-      if (attempts >= this.HALF_OPEN_MAX_ATTEMPTS) {
-        health.state = 'open';
-        this.logger.warn(`Circuit for ${scraperName} re-opened after failed half-open recovery`);
-      }
+      // A failed probe means the provider is still down — reopen immediately.
+      // (Admission is already rate-limited to HALF_OPEN_MAX_ATTEMPTS in isAvailable.)
+      health.state = 'open';
+      this.halfOpenAttempts.delete(scraperName);
+      this.logger.warn(`Circuit for ${scraperName} re-opened after failed half-open probe`);
       return;
     }
 
