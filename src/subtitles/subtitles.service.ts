@@ -1,8 +1,10 @@
-import { Injectable, Inject, Logger, BadRequestException, HttpException, HttpStatus } from '@nestjs/common';
+import { Injectable, Inject, Logger, BadRequestException, ForbiddenException, HttpException, HttpStatus } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import type { Cache } from 'cache-manager';
 import axios from 'axios';
+import * as crypto from 'crypto';
+import * as zlib from 'zlib';
 
 export interface SubtitleResult {
     id: string;
@@ -30,23 +32,58 @@ export class SubtitlesService {
     private readonly searchUrl = 'https://sub.wyzie.io/search';
     private readonly CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6h
 
-    /**
-     * Hosts we're willing to fetch subtitle files from. `src` is attacker-controllable,
-     * so without this the file endpoint would be an SSRF hole into the internal network.
-     */
-    private readonly ALLOWED_FILE_HOSTS = [
-        'sub.wyzie.io',
-        'sub.wyzie.ru',
-        'opensubtitles.com',
-        'opensubtitles.org',
-        'vip.opensubtitles.org',
-        'dl.opensubtitles.org',
-    ];
-
     constructor(
-        private configService: ConfigService,
+        private readonly configService: ConfigService,
         @Inject(CACHE_MANAGER) private cacheManager: Cache,
     ) { }
+
+    /**
+     * `src` is caller-controllable, so the file endpoint must never fetch an arbitrary
+     * URL (SSRF). Rather than allowlisting hosts — which silently drops legitimate
+     * results whenever the upstream uses a host we didn't predict — we HMAC-sign every
+     * src we hand out in search() and only fetch ones carrying a valid signature.
+     * That's both a tighter guard (attackers can't forge) and impossible to over-block.
+     *
+     * The secret piggybacks on WYZIE_API_KEY: without it search returns nothing, so no
+     * signed URLs exist to honour anyway. SUBTITLE_SIGNING_SECRET overrides it.
+     */
+    private signingSecret(): string | null {
+        return this.configService.get<string>('SUBTITLE_SIGNING_SECRET')
+            || this.configService.get<string>('WYZIE_API_KEY')
+            || null;
+    }
+
+    private sign(src: string): string {
+        const secret = this.signingSecret();
+        if (!secret) return '';
+        return crypto.createHmac('sha256', secret).update(src).digest('hex').slice(0, 32);
+    }
+
+    private verify(src: string, sig?: string): boolean {
+        const expected = this.sign(src);
+        if (!expected || !sig) return false;
+        const a = Buffer.from(expected);
+        const b = Buffer.from(sig);
+        // Length check first: timingSafeEqual throws on mismatched lengths.
+        return a.length === b.length && crypto.timingSafeEqual(a, b);
+    }
+
+    /** Defence in depth: even a signed URL must not point at internal infrastructure. */
+    private isPubliclyRoutable(raw: string): boolean {
+        try {
+            const u = new URL(raw);
+            if (u.protocol !== 'https:' && u.protocol !== 'http:') return false;
+            const h = u.hostname.toLowerCase();
+            if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.internal')) return false;
+            // Literal private / loopback / link-local IPs
+            if (/^(127\.|10\.|169\.254\.|192\.168\.|0\.)/.test(h)) return false;
+            if (/^172\.(1[6-9]|2\d|3[01])\./.test(h)) return false;
+            if (h === '::1' || h.startsWith('[')) return false;
+            return true;
+        } catch {
+            return false;
+        }
+    }
 
     async search(tmdbId: number, season?: number, episode?: number, language = 'en'): Promise<{ results: SubtitleResult[] }> {
         const apiKey = this.configService.get<string>('WYZIE_API_KEY');
@@ -71,14 +108,21 @@ export class SubtitlesService {
             const res = await axios.get(this.searchUrl, { params, timeout: 12000 });
             const raw = Array.isArray(res.data) ? res.data : (res.data?.results || []);
 
-            const results: SubtitleResult[] = raw
-                .filter((r: any) => r?.url && this.isAllowedFileUrl(r.url))
-                .map((r: any, i: number) => ({
-                    id: String(r.id ?? i),
-                    language: r.language || language,
-                    display: r.display || r.title || `Subtitle ${i + 1}`,
-                    url: `/api/v1/subtitles/file?src=${encodeURIComponent(r.url)}`,
-                }));
+            const usable = raw.filter((r: any) => typeof r?.url === 'string' && this.isPubliclyRoutable(r.url));
+            if (raw.length > 0 && usable.length === 0) {
+                // Loud, not silent: an empty CC menu should never be a mystery.
+                this.logger.error(
+                    `Subtitle search returned ${raw.length} entries but none were usable. ` +
+                    `First entry: ${JSON.stringify(raw[0])?.slice(0, 200)}`,
+                );
+            }
+
+            const results: SubtitleResult[] = usable.map((r: any, i: number) => ({
+                id: String(r.id ?? i),
+                language: r.language || language,
+                display: r.display || r.title || `Subtitle ${i + 1}`,
+                url: `/api/v1/subtitles/file?src=${encodeURIComponent(r.url)}&sig=${this.sign(r.url)}`,
+            }));
 
             const payload = { results };
             try {
@@ -94,12 +138,11 @@ export class SubtitlesService {
     }
 
     /** Fetch an upstream subtitle file and return it as WebVTT. */
-    async getFileAsVtt(src: string): Promise<string> {
+    async getFileAsVtt(src: string, sig?: string): Promise<string> {
         if (!src) throw new BadRequestException('src query parameter is required');
-        if (!this.isAllowedFileUrl(src)) {
-            // Never fetch arbitrary URLs on behalf of a caller.
-            throw new BadRequestException('src host is not allowed');
-        }
+        // Only fetch URLs this service itself issued (see signingSecret()).
+        if (!this.verify(src, sig)) throw new ForbiddenException('invalid or missing signature for src');
+        if (!this.isPubliclyRoutable(src)) throw new BadRequestException('src host is not allowed');
 
         const cacheKey = `subfile:${src}`;
         try {
@@ -109,36 +152,48 @@ export class SubtitlesService {
             // non-fatal
         }
 
+        let body: Buffer;
         try {
-            const res = await axios.get(src, {
+            const res = await axios.get<ArrayBuffer>(src, {
                 timeout: 15000,
-                responseType: 'text',
+                // Fetch as bytes: some sources serve gzipped .gz files, which would be
+                // mangled into garbage if decoded as text up front.
+                responseType: 'arraybuffer',
                 maxContentLength: 5 * 1024 * 1024, // subtitles are tiny; cap to avoid abuse
-                transformResponse: (d) => d,
             });
-
-            const vtt = this.toVtt(String(res.data ?? ''));
-            try {
-                await this.cacheManager.set(cacheKey, vtt, this.CACHE_TTL_MS);
-            } catch {
-                // non-fatal
-            }
-            return vtt;
+            body = Buffer.from(res.data);
         } catch (e: any) {
             this.logger.error(`Subtitle fetch failed for ${src}: ${e.message}`);
             throw new HttpException('Failed to fetch subtitle', HttpStatus.BAD_GATEWAY);
         }
-    }
 
-    private isAllowedFileUrl(raw: string): boolean {
-        try {
-            const u = new URL(raw);
-            if (u.protocol !== 'https:' && u.protocol !== 'http:') return false;
-            const host = u.hostname.toLowerCase();
-            return this.ALLOWED_FILE_HOSTS.some(h => host === h || host.endsWith(`.${h}`));
-        } catch {
-            return false;
+        // gzip magic bytes — .gz payloads are common from subtitle mirrors.
+        if (body.length > 2 && body[0] === 0x1f && body[1] === 0x8b) {
+            try {
+                body = zlib.gunzipSync(body);
+            } catch (e: any) {
+                this.logger.error(`Subtitle gunzip failed for ${src}: ${e.message}`);
+                throw new HttpException('Failed to decompress subtitle', HttpStatus.BAD_GATEWAY);
+            }
         }
+
+        const text = body.toString('utf-8');
+
+        // Validate it actually looks like a subtitle. Without this an upstream HTML
+        // error page would be wrapped in a WEBVTT header and served as a "subtitle",
+        // and <track> would fail silently with no clue why.
+        if (!text.includes('-->')) {
+            this.logger.error(`Upstream returned a non-subtitle payload for ${src} (no cue timings)`);
+            throw new HttpException('Upstream did not return a subtitle file', HttpStatus.BAD_GATEWAY);
+        }
+
+        const vtt = this.toVtt(text);
+        try {
+            await this.cacheManager.set(cacheKey, vtt, this.CACHE_TTL_MS);
+        } catch {
+            // non-fatal
+        }
+        return vtt;
     }
 
     /**

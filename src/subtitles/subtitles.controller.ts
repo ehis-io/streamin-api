@@ -28,12 +28,13 @@ export class SubtitlesController {
     }
 
     /**
-     * GET /api/v1/subtitles/file?src=<encoded upstream url> -> WebVTT
-     * `src` is host-allowlisted in the service to avoid an SSRF hole.
+     * GET /api/v1/subtitles/file?src=<encoded upstream url>&sig=<hmac> -> WebVTT
+     * `src` is caller-controlled, so only signatures issued by /search are honoured
+     * (see SubtitlesService.signingSecret) — otherwise this would be an SSRF hole.
      */
     @Get('file')
-    async file(@Query('src') src: string, @Res() res: Response) {
-        const vtt = await this.subtitlesService.getFileAsVtt(src);
+    async file(@Query('src') src: string, @Query('sig') sig: string, @Res() res: Response) {
+        const vtt = await this.subtitlesService.getFileAsVtt(src, sig);
         res.setHeader('Content-Type', 'text/vtt; charset=utf-8');
         res.setHeader('Cache-Control', 'public, max-age=21600'); // 6h, matches service TTL
         res.send(vtt);
