@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { Scraper, ScraperSearchResult, StreamLink } from '../scraper.interface';
 
 /**
- * VidFast (https://vidfast.vc) — TMDB-keyed iframe embed provider.
+ * VidFast (https://vidfast.pro) — TMDB-keyed iframe embed provider.
  *
  * Patterns (verified live):
  *   movie -> /movie/<tmdbId>
@@ -11,9 +11,9 @@ import { Scraper, ScraperSearchResult, StreamLink } from '../scraper.interface';
  *
  * Anime (/anime/<malId>/...) returns 404, so this scraper is movie/tv only.
  *
- * Defaults to .vc because vidfast.pro 301s (permanent) here — .vc is the canonical
- * origin, so this avoids a redirect hop on every embed load. These domains rotate,
- * so override with VIDFAST_BASE_URL rather than editing this file.
+ * .pro 301s to .vc; we use .pro as the stable entry point so a future rotation is
+ * followed automatically, at the cost of one redirect hop the browser handles.
+ * Override with VIDFAST_BASE_URL rather than editing this file.
  */
 @Injectable()
 export class VidFastScraper implements Scraper {
@@ -26,7 +26,7 @@ export class VidFastScraper implements Scraper {
   constructor(private readonly configService: ConfigService) {
     // Configurable so a domain rotation is an env change, not a redeploy
     // (same reasoning as VIDSRC_BASE_URLS).
-    this.baseUrl = (this.configService.get<string>('VIDFAST_BASE_URL') || 'https://vidfast.vc').replace(/\/$/, '');
+    this.baseUrl = (this.configService.get<string>('VIDFAST_BASE_URL') || 'https://vidfast.pro').replace(/\/$/, '');
   }
 
   async search(query: string, tmdbId?: number, imdbId?: string, malId?: number, priority: number = 0, mediaType?: string): Promise<ScraperSearchResult[]> {
