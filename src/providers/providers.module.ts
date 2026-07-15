@@ -4,6 +4,7 @@ import { StreamValidationService } from './stream-validation.service';
 import { StreamCacheService } from './stream-cache.service';
 import { VidSrcScraper } from './scrapers/vidsrc.scraper';
 import { VidLinkScraper } from './scrapers/vidlink.scraper';
+import { VidFastScraper } from './scrapers/vidfast.scraper';
 import { GogoAnimeScraper } from './scrapers/gogoanime.scraper';
 import { NineAnimeScraper } from './scrapers/nineanime.scraper';
 import { AnimePaheScraper } from './scrapers/animepahe.scraper';
@@ -29,6 +30,7 @@ import { IframeResolverService } from './iframe-resolver.service';
     IframeResolverService,
     VidSrcScraper,
     VidLinkScraper,
+    VidFastScraper,
     GogoAnimeScraper,
     NineAnimeScraper,
     AnimePaheScraper,
@@ -36,9 +38,9 @@ import { IframeResolverService } from './iframe-resolver.service';
     MirrorsScraper,
     {
       provide: SCRAPER_TOKEN,
-      useFactory: (vidsrc: VidSrcScraper, vidlink: VidLinkScraper, gogo: GogoAnimeScraper, nineanime: NineAnimeScraper, animepahe: AnimePaheScraper, mirrors: MirrorsScraper) =>
-        [vidsrc, vidlink, gogo, nineanime, animepahe, mirrors],
-      inject: [VidSrcScraper, VidLinkScraper, GogoAnimeScraper, NineAnimeScraper, AnimePaheScraper, MirrorsScraper],
+      useFactory: (vidsrc: VidSrcScraper, vidlink: VidLinkScraper, vidfast: VidFastScraper, gogo: GogoAnimeScraper, nineanime: NineAnimeScraper, animepahe: AnimePaheScraper, mirrors: MirrorsScraper) =>
+        [vidsrc, vidlink, vidfast, gogo, nineanime, animepahe, mirrors],
+      inject: [VidSrcScraper, VidLinkScraper, VidFastScraper, GogoAnimeScraper, NineAnimeScraper, AnimePaheScraper, MirrorsScraper],
     },
   ],
   exports: [ProvidersService],
