@@ -16,6 +16,7 @@ import { AnimesModule } from './animes/animes.module';
 import { AiModule } from './ai/ai.module';
 import { PlaylistsModule } from './playlists/playlists.module';
 import { PuppeteerModule } from './puppeteer/puppeteer.module';
+import { SubtitlesModule } from './subtitles/subtitles.module';
 
 @Module({
   imports: [
@@ -36,6 +37,7 @@ import { PuppeteerModule } from './puppeteer/puppeteer.module';
     AiModule,
     PlaylistsModule,
     PuppeteerModule,
+    SubtitlesModule,
   ],
   controllers: [AppController],
   providers: [

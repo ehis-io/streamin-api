@@ -45,11 +45,21 @@ jobs:
           REDIS_PORT=${{ secrets.REDIS_PORT }}
           TMDB_API_KEY=${{ secrets.TMDB_API_KEY }}
           API_URL=${{ secrets.API_URL }}
+          WYZIE_API_KEY=${{ secrets.WYZIE_API_KEY }}
+          GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
+          ADMIN_API_KEY=${{ secrets.ADMIN_API_KEY }}
 
           EOF
 
       - name: 🔍 Check .env file
-        run: cat .env
+        # Print only which keys are set — never the values. `cat .env` dumped every
+        # secret into the build log, which only stayed private because GitHub masks
+        # exact-match secret values.
+        run: |
+          echo "Keys written to .env (values redacted):"
+          grep -oE '^\s*[A-Z_]+=' .env | tr -d ' =' | sort
+          echo "Missing/empty values:"
+          grep -E '^\s*[A-Z_]+=\s*$' .env | tr -d ' =' || echo "  (none)"
 
       - name: 📦 Install dependencies
         run: npm install --no-audit --no-fund

@@ -11,8 +11,9 @@ import { Scraper, ScraperSearchResult, StreamLink } from '../scraper.interface';
  *
  * Anime (/anime/<malId>/...) returns 404, so this scraper is movie/tv only.
  *
- * Points at .vc directly — vidfast.pro just 302s here, so using the canonical
- * origin saves the browser a redirect hop on every embed load.
+ * Defaults to .vc because vidfast.pro 301s (permanent) here — .vc is the canonical
+ * origin, so this avoids a redirect hop on every embed load. These domains rotate,
+ * so override with VIDFAST_BASE_URL rather than editing this file.
  */
 @Injectable()
 export class VidFastScraper implements Scraper {
@@ -20,9 +21,13 @@ export class VidFastScraper implements Scraper {
   priority = 6;
   supportedTypes = ['movie', 'tv'];
   private readonly logger = new Logger(VidFastScraper.name);
-  private readonly baseUrl = 'https://vidfast.vc';
+  private readonly baseUrl: string;
 
-  constructor(private configService: ConfigService) {}
+  constructor(private readonly configService: ConfigService) {
+    // Configurable so a domain rotation is an env change, not a redeploy
+    // (same reasoning as VIDSRC_BASE_URLS).
+    this.baseUrl = (this.configService.get<string>('VIDFAST_BASE_URL') || 'https://vidfast.vc').replace(/\/$/, '');
+  }
 
   async search(query: string, tmdbId?: number, imdbId?: string, malId?: number, priority: number = 0, mediaType?: string): Promise<ScraperSearchResult[]> {
     this.logger.log(`Searching for ${query} (TMDB: ${tmdbId}, IMDB: ${imdbId}, Type: ${mediaType}) [Priority: ${priority}]`);

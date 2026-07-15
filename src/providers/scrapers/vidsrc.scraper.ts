@@ -74,6 +74,21 @@ export class VidSrcScraper implements Scraper {
       }
     }
 
+    // Ask VidSrc's own player to preselect a default subtitle language, so viewers
+    // don't have to use its CC menu (whose subtitle fetch is flaky). This only hints
+    // their embed — we don't control what it actually loads.
+    const dsLang = this.configService.get<string>('VIDSRC_DEFAULT_SUB_LANG', 'en');
+    if (dsLang) {
+      try {
+        const u = new URL(embedUrl);
+        u.searchParams.set('ds_lang', dsLang);
+        embedUrl = u.toString();
+      } catch {
+        const operator = embedUrl.includes('?') ? '&' : '?';
+        embedUrl = `${embedUrl}${operator}ds_lang=${encodeURIComponent(dsLang)}`;
+      }
+    }
+
     return [{
       url: embedUrl,
       quality: 'Auto',
