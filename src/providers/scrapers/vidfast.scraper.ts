@@ -3,17 +3,18 @@ import { ConfigService } from '@nestjs/config';
 import { Scraper, ScraperSearchResult, StreamLink } from '../scraper.interface';
 
 /**
- * VidFast (https://vidfast.pro) — TMDB-keyed iframe embed provider.
+ * VidFast (https://vidfast.vc) — TMDB/IMDB-keyed iframe embed provider.
  *
- * Patterns (verified live):
- *   movie -> /movie/<tmdbId>
- *   tv    -> /tv/<tmdbId>/<season>/<episode>
+ * Per VidFast's own documentation:
+ *   movie -> /movie/<id>?autoPlay=true
+ *   tv    -> /tv/<id>/<season>/<episode>?autoPlay=true
+ *   id may be a TMDB or IMDB identifier.
+ *
+ * vidfast.vc is the domain their docs list for embed URLs (.pro merely 301s here
+ * and isn't a documented embed origin). These domains do rotate, so override with
+ * VIDFAST_BASE_URL rather than editing this file.
  *
  * Anime (/anime/<malId>/...) returns 404, so this scraper is movie/tv only.
- *
- * .pro 301s to .vc; we use .pro as the stable entry point so a future rotation is
- * followed automatically, at the cost of one redirect hop the browser handles.
- * Override with VIDFAST_BASE_URL rather than editing this file.
  */
 @Injectable()
 export class VidFastScraper implements Scraper {
@@ -26,7 +27,7 @@ export class VidFastScraper implements Scraper {
   constructor(private readonly configService: ConfigService) {
     // Configurable so a domain rotation is an env change, not a redeploy
     // (same reasoning as VIDSRC_BASE_URLS).
-    this.baseUrl = (this.configService.get<string>('VIDFAST_BASE_URL') || 'https://vidfast.pro').replace(/\/$/, '');
+    this.baseUrl = (this.configService.get<string>('VIDFAST_BASE_URL') || 'https://vidfast.vc').replace(/\/$/, '');
   }
 
   async search(query: string, tmdbId?: number, imdbId?: string, malId?: number, priority: number = 0, mediaType?: string): Promise<ScraperSearchResult[]> {
@@ -74,9 +75,26 @@ export class VidFastScraper implements Scraper {
       }
     }
 
-    const primaryColor = this.configService.get<string>('VIDFAST_PRIMARY_COLOR', 'e50914');
+    // Per VidFast's docs: theme is a bare hex code (no '#'), autoPlay is camelCase,
+    // and `sub` sets the player's default subtitle language (their equivalent of
+    // VidSrc's ds_lang) — worth setting since their own CC picker is the only way
+    // to get captions inside the embed.
+    const params = new URLSearchParams({
+      theme: this.configService.get<string>('VIDFAST_PRIMARY_COLOR', 'e50914'),
+      autoPlay: 'true',
+    });
+
+    const subLang = this.configService.get<string>('VIDFAST_DEFAULT_SUB_LANG', 'en');
+    if (subLang) params.set('sub', subLang);
+
+    // Series-only niceties, ignored by the movie player.
+    if (episode && (episode.season || episode.episode)) {
+      params.set('nextButton', 'true');
+      params.set('autoNext', 'true'); // requires nextButton per the docs
+    }
+
     return [{
-      url: `${finalUrl}?theme=${primaryColor}&autoPlay=true`,
+      url: `${finalUrl}?${params.toString()}`,
       quality: 'Auto',
       isM3U8: false,
       headers: { 'Referer': `${this.baseUrl}/` },
