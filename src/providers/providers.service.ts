@@ -42,6 +42,11 @@ function qualityScore(link: StreamLink): number {
   return 5;
 }
 
+/** True for a playable media file (as opposed to an embed/iframe page). */
+export function isDirectMediaUrl(url: string): boolean {
+  return /\.(mp4|m4v|webm|mkv|mov|m3u8|m3u)(\?|#|$)/i.test(url || '');
+}
+
 /**
  * Decide whether a stream needs to be proxied through our backend.
  *
@@ -54,7 +59,12 @@ function qualityScore(link: StreamLink): number {
  * (~100-500ms per segment) on every `.ts` fetch.
  */
 function determineNeedsProxy(link: StreamLink): boolean {
-  if (!link.isM3U8) return false;
+  // Applies to any direct media, not just HLS. This used to early-return false for
+  // everything non-M3U8, which made the checks below unreachable for direct .mp4
+  // links — including vodvidl, which is in the force-proxy list precisely because it
+  // demands a Referer the browser can't send. Embed pages are still never proxied;
+  // they're loaded in an iframe.
+  if (!isDirectMediaUrl(link.url)) return false;
 
   // If the scraper set custom headers beyond User-Agent, the browser can't
   // forward them on cross-origin fetches — we must proxy.

@@ -159,10 +159,12 @@ export class NineAnimeScraper implements Scraper {
                 quality: serverName,
                 isM3U8: (direct || embed).includes('.m3u8'),
                 type,
-                headers: {
-                    'Referer': `${this.baseUrl}/`,
-                    'Origin': this.baseUrl,
-                },
+                // The direct /videos/ file is openly fetchable (verified: 206 + Range
+                // support with no Referer), so deliberately send NO headers — attaching
+                // a Referer would flag it as needing the proxy, and proxying it would
+                // cost a hop and break seeking for no benefit. The embed fallback still
+                // needs the Referer.
+                ...(direct ? {} : { headers: { 'Referer': `${this.baseUrl}/`, 'Origin': this.baseUrl } }),
             });
         });
 
