@@ -304,14 +304,20 @@ export class HlsProxyService {
   }
 
   /**
-   * Directly proxy a resource (segment, key, etc.) and stream it to the client.
+   * Directly proxy a resource (segment, key, whole media file) and stream it to the client.
+   *
+   * `range` is the client's Range header. Relaying it (and the upstream's 206 +
+   * Content-Range) is what makes seeking work — without it the browser gets a flat 200
+   * and a <video> can't scrub. That only started mattering once direct .mp4 links began
+   * routing through here rather than being (wrongly) rendered in an iframe.
    */
-  async proxyResource(targetUrl: string, headers: Record<string, string> | undefined, res: any) {
+  async proxyResource(targetUrl: string, headers: Record<string, string> | undefined, res: any, range?: string) {
     try {
       const reqHeaders: Record<string, string> = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
         ...headers,
       };
+      if (range) reqHeaders['Range'] = range;
 
       const response = await axios.get(targetUrl, {
         headers: reqHeaders,
@@ -321,13 +327,35 @@ export class HlsProxyService {
         httpsAgent,
       });
 
-      const contentType = response.headers['content-type'];
-      if (contentType) res.setHeader('Content-Type', contentType);
+      // Mirror the upstream status so a 206 stays a 206 (pipe/send would force 200).
+      res.status(response.status);
 
-      const cacheControl = response.headers['cache-control'];
-      if (cacheControl) res.setHeader('Cache-Control', cacheControl);
+      // Relay the headers a media element needs for seeking + correct buffering.
+      for (const h of ['content-type', 'cache-control', 'content-length', 'content-range', 'accept-ranges', 'last-modified', 'etag']) {
+        const v = response.headers[h];
+        if (v) res.setHeader(h, v);
+      }
+      if (!response.headers['accept-ranges']) res.setHeader('Accept-Ranges', 'bytes');
 
-      response.data.pipe(res);
+      const upstream = response.data;
+
+      // If the client goes away (tab closed, seek, failover), stop pulling from origin —
+      // otherwise the download runs to completion in the background.
+      const destroyUpstream = () => {
+        try { upstream.destroy(); } catch { /* already gone */ }
+      };
+      res.on('close', destroyUpstream);
+
+      // .pipe() does NOT forward source errors. Without this handler an upstream reset
+      // mid-stream emits an unhandled 'error' and takes the whole process down.
+      upstream.on('error', (err: any) => {
+        this.logger.warn(`Upstream stream error for ${targetUrl}: ${err?.message}`);
+        destroyUpstream();
+        if (!res.headersSent) res.status(HttpStatus.BAD_GATEWAY);
+        res.end();
+      });
+
+      upstream.pipe(res);
     } catch (e: any) {
       const status = e.response?.status;
       this.logger.error(`Binary proxy failed for ${targetUrl}: ${e.message}`);

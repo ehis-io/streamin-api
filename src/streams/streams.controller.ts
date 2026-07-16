@@ -73,8 +73,9 @@ export class StreamsController {
 
         res.send(cleaned);
       } else {
-        // Proxy binary segment/key
-        await this.hlsProxyService.proxyResource(url, headers, res);
+        // Proxy binary segment/key/media file. Forward the client's Range header so
+        // seeking works on whole-file media (a <video> needs 206 + Content-Range).
+        await this.hlsProxyService.proxyResource(url, headers, res, req.headers.range);
       }
     } catch (e: any) {
       this.logger.error(`HLS proxy failed for ${url}: ${e.message}`);
