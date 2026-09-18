@@ -15,8 +15,6 @@ export class VidSrcScraper implements Scraper {
       : [
         'https://vidsrc.me',
         'https://vidsrc.pm',
-        'https://vidsrc.xyz',
-        'https://vidsrc.net'
       ];
   }
 

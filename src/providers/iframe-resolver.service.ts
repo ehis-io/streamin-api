@@ -41,8 +41,9 @@ export class IframeResolverService {
   /**
    * Load an iframe/embed URL in Puppeteer with aggressive ad blocking.
    * Intercepts video network requests (M3U8, MP4) and returns clean StreamLinks.
+   * Pass `referer` for embeds that refuse to load unless opened from their parent site.
    */
-  async resolve(embedUrl: string, priority: number = 0): Promise<StreamLink[]> {
+  async resolve(embedUrl: string, priority: number = 0, referer?: string): Promise<StreamLink[]> {
     this.logger.log(`Resolving embed: ${embedUrl}`);
 
     return this.puppeteerService.withPage(async (page) => {
@@ -139,7 +140,7 @@ export class IframeResolverService {
       page.on('response', onResponse);
 
       try {
-        await page.goto(embedUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
+        await page.goto(embedUrl, { waitUntil: 'domcontentloaded', timeout: 10000, ...(referer ? { referer } : {}) });
 
         // Try to auto-click play buttons if present
         await this.tryClickPlay(page);

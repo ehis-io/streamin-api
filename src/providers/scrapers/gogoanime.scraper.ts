@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Scraper, ScraperSearchResult, StreamLink } from '../scraper.interface';
-import { getAbsoluteApiUrl } from '../../common/utils/config.utils';
+import { IframeResolverService } from '../iframe-resolver.service';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 
@@ -12,7 +12,7 @@ export class GogoAnimeScraper implements Scraper {
     supportedTypes = ['anime', 'tv'];
     private readonly logger = new Logger(GogoAnimeScraper.name);
     private readonly baseUrl = 'https://gogoanime.by';
-    constructor(private configService: ConfigService) { }
+    constructor(private configService: ConfigService, private iframeResolver: IframeResolverService) { }
     private readonly headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -99,8 +99,8 @@ export class GogoAnimeScraper implements Scraper {
             const dubUrl = `${this.baseUrl}/${slug}-episode-${episode.episode}-english-dubbed`;
 
             const results = await Promise.all([
-                this.extractFromPage(subUrl, 'sub').catch(() => []),
-                this.extractFromPage(dubUrl, 'dub').catch(() => [])
+                this.extractFromPage(subUrl, 'sub', priority).catch(() => []),
+                this.extractFromPage(dubUrl, 'dub', priority).catch(() => [])
             ]);
 
             const allLinks = results.flat();
@@ -114,78 +114,37 @@ export class GogoAnimeScraper implements Scraper {
         }
     }
 
-    private async extractFromPage(url: string, type: 'sub' | 'dub'): Promise<StreamLink[]> {
+    /**
+     * Each server on an episode page is a `.player-type-link` whose `data-src` points at
+     * gogoanime.by/player/, which wraps the real embed (e.g. megavid.buzz) in an iframe.
+     * The player page 403s without a gogoanime Referer, and the embed only plays when
+     * framed by it, so the browser can't iframe either from our origin. Instead we load
+     * the player page in Puppeteer with that Referer and return the HLS stream it
+     * requests (proxied downstream, since it carries the embed's Referer).
+     */
+    private async extractFromPage(url: string, type: 'sub' | 'dub', priority: number): Promise<StreamLink[]> {
+        let pageData: string;
         try {
-            const response = await axios.get(url, {
-                headers: this.headers,
-                timeout: 30000
-            });
-
-            const $ = cheerio.load(response.data);
-            const streamLinks: StreamLink[] = [];
-
-            // Method 1: Extract from .player-type-link elements (newer structure)
-            $('.player-type-link').each((_, element) => {
-                const $elem = $(element);
-                const serverType = $elem.attr('data-type');
-                const serverName = $elem.text().trim() || 'Unknown Server';
-
-                const encryptedUrl1 = $elem.attr('data-encrypted-url1');
-                const encryptedUrl2 = $elem.attr('data-encrypted-url2');
-                const encryptedUrl3 = $elem.attr('data-encrypted-url3');
-                const dataRef = $elem.attr('data-ref');
-
-                if (encryptedUrl1 && serverType) {
-                    const params = new URLSearchParams();
-                    params.append(serverType, encryptedUrl1);
-                    if (encryptedUrl2) params.append('url2', encryptedUrl2);
-                    if (encryptedUrl3) params.append('url3', encryptedUrl3);
-                    params.append('ref', dataRef || this.baseUrl);
-                    params.append('feature_image', url);
-                    params.append('user_agent', 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36');
-
-                    const playerUrl = `https://9animetv.be/wp-content/plugins/video-player/includes/player/player.php?${params.toString()}`;
-
-                    streamLinks.push({
-                        url: playerUrl,
-                        quality: serverName,
-                        isM3U8: false,
-                        type,
-                        headers: {
-                            'Referer': this.baseUrl,
-                            'Origin': this.baseUrl
-                        }
-                    });
-                }
-            });
-
-            // Method 2 removed: We no longer extract bare .m3u8 streams,
-            // only returning the iframes (Method 1 and Method 3) as per the iframe-only revert.
-
-
-            // Method 3: Extract iframe src directly (last resort)
-            if (streamLinks.length === 0) {
-                const iframeSrc = $('#player iframe, .player-embed iframe, .video-player iframe').attr('src');
-                if (iframeSrc) {
-                    streamLinks.push({
-                        url: iframeSrc,
-                        quality: 'Main Server',
-                        isM3U8: iframeSrc.includes('.m3u8'),
-                        type,
-                        headers: {
-                            'Referer': this.baseUrl,
-                            'Origin': this.baseUrl
-                        }
-                    });
-                }
-            }
-
-            return streamLinks;
+            // Episode URLs 301 to their trailing-slash form; request that directly.
+            const response = await axios.get(url.replace(/\/?$/, '/'), { headers: this.headers, timeout: 30000 });
+            pageData = response.data;
         } catch (e) {
-            if (axios.isAxiosError(e) && e.response?.status === 404) {
-                return [];
-            }
+            if (axios.isAxiosError(e) && e.response?.status === 404) return [];
             throw e;
         }
+
+        const $ = cheerio.load(pageData);
+        const servers = $('.player-type-link')
+            .map((_, el) => ({ playerUrl: $(el).attr('data-src'), name: $(el).text().trim() || 'Server' }))
+            .get()
+            // Blogger serves an IP-bound googlevideo file rather than an embed; skip it.
+            .filter(s => s.playerUrl?.startsWith('http') && !s.playerUrl.includes('source=blogger'));
+
+        const results = await Promise.all(servers.map(async ({ playerUrl, name }) => {
+            const links = await this.iframeResolver.resolve(playerUrl!, priority, `${this.baseUrl}/`);
+            return links.map(l => ({ ...l, quality: name, type }));
+        }));
+
+        return results.flat();
     }
 }
