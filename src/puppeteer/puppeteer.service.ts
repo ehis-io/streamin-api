@@ -22,6 +22,10 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
   // Set when Chrome is over its memory budget while tasks are running; the browser is
   // restarted as soon as the last task finishes instead of killing work mid-scrape.
   private restartPending = false;
+  // A fresh browser already over the limit gains nothing from a restart except
+  // lost work, so only restart one that has actually accumulated usage.
+  private tasksSinceLaunch = 0;
+  private static readonly MIN_TASKS_BEFORE_RESTART = 10;
   private housekeepingTimer: NodeJS.Timeout | null = null;
 
   private readonly maxPages: number;
@@ -160,6 +164,7 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
         protocolTimeout: 300000, // 5 minutes
         timeout: 60000, // 1 minute launch timeout
       }) as Browser;
+      this.tasksSinceLaunch = 0;
       this.logger.log('Puppeteer browser launched successfully');
     } catch (error) {
       this.logger.error(`Failed to launch browser: ${error.message}`);
@@ -198,6 +203,10 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
 
     const usedMb = await this.browserMemoryMb();
     if (usedMb === null || usedMb <= this.maxMemoryMb) return;
+    if (this.tasksSinceLaunch < PuppeteerService.MIN_TASKS_BEFORE_RESTART) {
+      this.logger.debug(`Browser using ${usedMb}MB (limit ${this.maxMemoryMb}MB) after only ${this.tasksSinceLaunch} task(s); not restarting`);
+      return;
+    }
     if (this.activePages === 0) {
       await this.restartBrowser(`using ${usedMb}MB (limit ${this.maxMemoryMb}MB)`);
     } else if (!this.restartPending) {
@@ -348,6 +357,7 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
   private async releasePage(pageObj: PageObj) {
     const { page, context } = pageObj;
     pageObj.uses++;
+    this.tasksSinceLaunch++;
     if (page.isClosed()) return;
     if (pageObj.uses >= this.pageMaxUses || this.restartPending) {
       await context.close().catch(() => {});
