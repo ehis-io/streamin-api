@@ -86,5 +86,8 @@ jobs:
 
       - name: 📊 Memory report
         run: |
+          sleep 30 # let the app start and prewarm Chrome
           free -m
-          pm2 describe app | grep -iE "status|node args|max memory|restarts|heap size" || true
+          pm2 describe app | grep -iE "status|interpreter args|restarts" || true
+          echo "Top processes by memory (MB):"
+          ps -eo rss=,comm= --sort=-rss | head -8 | awk '{printf "%6d  %s\n", $1/1024, $2}'
