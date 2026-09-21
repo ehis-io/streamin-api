@@ -155,6 +155,10 @@ export class StreamValidationService {
       return new Promise((resolve) => {
         let buffer = '';
         const stream = response.data;
+        // axios' timeout stops at the response headers; a server that then trickles
+        // (or stalls) the body would otherwise hold this socket open forever.
+        const stall = setTimeout(() => { stream.destroy(); resolve(false); }, 3000);
+        stream.on('close', () => clearTimeout(stall));
 
         stream.on('data', (chunk: Buffer) => {
           buffer += chunk.toString('utf8');

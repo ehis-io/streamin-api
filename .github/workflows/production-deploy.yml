@@ -49,6 +49,13 @@ jobs:
           GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
           ADMIN_API_KEY=${{ secrets.ADMIN_API_KEY }}
 
+          # Puppeteer memory limits (repo variables; empty = code defaults)
+          PUPPETEER_MAX_PAGES=${{ vars.PUPPETEER_MAX_PAGES }}
+          PUPPETEER_PREWARM_PAGES=${{ vars.PUPPETEER_PREWARM_PAGES }}
+          PUPPETEER_PAGE_MAX_USES=${{ vars.PUPPETEER_PAGE_MAX_USES }}
+          PUPPETEER_IDLE_PAGE_TTL_MS=${{ vars.PUPPETEER_IDLE_PAGE_TTL_MS }}
+          PUPPETEER_MAX_MEMORY_MB=${{ vars.PUPPETEER_MAX_MEMORY_MB }}
+
           EOF
 
       - name: 🔍 Check .env file
@@ -76,3 +83,8 @@ jobs:
         run: |
           pm2 reload ecosystem.config.js --env development
           pm2 save
+
+      - name: 📊 Memory report
+        run: |
+          free -m
+          pm2 describe app | grep -iE "status|node args|max memory|restarts|heap size" || true

@@ -124,11 +124,20 @@ export class HlsDownloadService {
     // Pipe ffmpeg stdout → HTTP response
     ffmpeg.stdout.pipe(res);
 
-    // Collect ffmpeg stderr for logging only
+    // Collect the tail of ffmpeg stderr for logging only — capped, since it can log
+    // a line per segment for a whole movie.
     let ffmpegErr = '';
     ffmpeg.stderr.on('data', (d: Buffer) => {
-      ffmpegErr += d.toString();
+      ffmpegErr = (ffmpegErr + d.toString()).slice(-4096);
     });
+
+    // Client cancelled: stop ffmpeg so the segment loop below exits instead of
+    // downloading the rest of the movie for nobody.
+    res.on('close', () => {
+      if (!res.writableFinished) ffmpeg.kill('SIGKILL');
+    });
+    // Writes after ffmpeg exits raise EPIPE; without a handler that crashes the process.
+    ffmpeg.stdin.on('error', (err) => this.logger.debug(`ffmpeg stdin closed: ${err.message}`));
 
     ffmpeg.on('close', (code) => {
       const status = code === 0 ? 'complete' : `error (code ${code})`;
@@ -155,16 +164,33 @@ export class HlsDownloadService {
         });
 
         await new Promise<void>((resolve, reject) => {
+          const resume = () => segRes.data.resume();
+          // If ffmpeg dies while this segment is paused, 'drain' never comes.
+          const onStdinClose = () => {
+            segRes.data.destroy();
+            reject(new Error('ffmpeg stdin closed'));
+          };
+          const cleanup = () => {
+            ffmpeg.stdin.off('drain', resume);
+            ffmpeg.stdin.off('close', onStdinClose);
+          };
+          ffmpeg.stdin.once('close', onStdinClose);
+
           segRes.data.on('data', (chunk: Buffer) => {
             if (!ffmpeg.stdin.writable) {
-              segRes.data.destroy();
-              reject(new Error('ffmpeg stdin closed'));
+              cleanup();
+              onStdinClose();
               return;
             }
-            ffmpeg.stdin.write(chunk);
+            // Honour backpressure: when ffmpeg (or the client behind it) is slower than
+            // the CDN, unpaused writes queue the whole movie in Node's memory.
+            if (!ffmpeg.stdin.write(chunk)) {
+              segRes.data.pause();
+              ffmpeg.stdin.once('drain', resume);
+            }
           });
-          segRes.data.on('end', () => { downloadedSegments++; resolve(); });
-          segRes.data.on('error', () => resolve()); // Skip bad segment gracefully
+          segRes.data.on('end', () => { cleanup(); downloadedSegments++; resolve(); });
+          segRes.data.on('error', () => { cleanup(); resolve(); }); // Skip bad segment gracefully
         });
       } catch (err: any) {
         this.logger.warn(`Skipping segment: ${err.message}`);

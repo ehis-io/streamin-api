@@ -1,25 +1,57 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { promises as fs } from 'fs';
 import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
-import { Browser, Page } from 'puppeteer';
+import { Browser, BrowserContext, HTTPRequest, Page } from 'puppeteer';
+
+type PageObj = { page: Page; context: BrowserContext; uses: number; idleSince: number };
+
+const BLOCKED_RESOURCES = ['image', 'stylesheet', 'font', 'manifest', 'texttrack', 'eventsource', 'websocket', 'media', 'other'];
+const BLOCKED_DOMAINS = [
+  'google-analytics.com', 'googletagmanager.com', 'doubleclick.net',
+  'onesignal.com', 'adsbygoogle', 'crashlytics.com', 'facebook.net'
+];
 
 @Injectable()
 export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PuppeteerService.name);
   private browser: Browser | null = null;
+  private launching: Promise<void> | null = null;
+  private restarting: Promise<void> | null = null;
+  // Set when Chrome is over its memory budget while tasks are running; the browser is
+  // restarted as soon as the last task finishes instead of killing work mid-scrape.
+  private restartPending = false;
+  private housekeepingTimer: NodeJS.Timeout | null = null;
+
   private readonly maxPages: number;
+  private readonly prewarmPages: number;
+  // A reused page keeps every heap, JIT cache and leaked listener of the scraper sites it
+  // visited. Retiring it after N tasks caps how far a single renderer can grow.
+  private readonly pageMaxUses: number;
+  private readonly idlePageTtlMs: number;
+  private readonly maxMemoryMb: number;
+
   private activePages = 0;
-  private readonly pagePool: { page: Page; context: any }[] = [];
-  private queue: { priority: number; resolve: (val: { page: Page; context: any }) => void; reject: (err: any) => void }[] = [];
-  private activeTasks = new Set<{ pageObj: { page: Page; context: any }, priority: number }>();
+  private readonly pagePool: PageObj[] = [];
+  private queue: { priority: number; resolve: (val: PageObj) => void; reject: (err: any) => void }[] = [];
+  private activeTasks = new Set<{ pageObj: PageObj, priority: number }>();
 
   private readonly proxyUrls: string[];
   private proxyIndex = 0;
 
   constructor(private configService: ConfigService) {
     puppeteer.use(StealthPlugin());
-    this.maxPages = this.configService.get<number>('PUPPETEER_MAX_PAGES', 6);
+    // Env values arrive as strings; coerce so the capacity maths is numeric.
+    const num = (key: string, fallback: number) => {
+      const n = Number(this.configService.get(key));
+      return Number.isFinite(n) && n > 0 ? n : fallback;
+    };
+    this.maxPages = num('PUPPETEER_MAX_PAGES', 6);
+    this.prewarmPages = Math.min(num('PUPPETEER_PREWARM_PAGES', 2), this.maxPages);
+    this.pageMaxUses = num('PUPPETEER_PAGE_MAX_USES', 25);
+    this.idlePageTtlMs = num('PUPPETEER_IDLE_PAGE_TTL_MS', 5 * 60 * 1000);
+    this.maxMemoryMb = num('PUPPETEER_MAX_MEMORY_MB', 1536);
 
     const proxyConfig = this.configService.get<string>('PROXY_URLS', '');
     this.proxyUrls = proxyConfig
@@ -39,24 +71,31 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
 
   async onModuleInit() {
     await this.ensureBrowser();
-    // Pre-warm the pool with more pages to handle initial bursts
-    const prewarmCount = Math.min(6, this.maxPages);
-    this.logger.log(`Pre-warming Puppeteer page pool (${prewarmCount} pages)...`);
-    const warmTasks = Array(prewarmCount).fill(null).map(() => this.createNewPage());
-    const results = await Promise.all(warmTasks);
-    results.forEach(warmed => {
-      if (warmed) this.pagePool.push(warmed);
-    });
+    await this.prewarm();
+    this.housekeepingTimer = setInterval(() => {
+      this.housekeeping().catch(e => this.logger.warn(`Puppeteer housekeeping failed: ${e.message}`));
+    }, 60 * 1000);
+    this.housekeepingTimer.unref();
   }
 
   async onModuleDestroy() {
+    if (this.housekeepingTimer) clearInterval(this.housekeepingTimer);
     if (this.browser) {
       await this.browser.close();
       this.browser = null;
     }
   }
 
+  private async prewarm() {
+    this.logger.log(`Pre-warming Puppeteer page pool (${this.prewarmPages} pages)...`);
+    const results = await Promise.all(Array(this.prewarmPages).fill(null).map(() => this.createNewPage()));
+    results.forEach(warmed => {
+      if (warmed) this.pagePool.push(warmed);
+    });
+  }
+
   private async ensureBrowser() {
+    if (this.restarting) await this.restarting;
     if (this.browser) {
       try {
         await this.browser.version();
@@ -67,7 +106,14 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
         this.pagePool.length = 0; // Clear stale pool
       }
     }
+    // Several pages can be requested at once while the browser is down; launch it once.
+    if (!this.launching) {
+      this.launching = this.launchBrowser().finally(() => { this.launching = null; });
+    }
+    await this.launching;
+  }
 
+  private async launchBrowser() {
     try {
       const launchArgs = [
         '--no-sandbox',
@@ -97,7 +143,9 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
         '--use-mock-keychain',
         '--disable-features=Translate,OptimizationHints,MediaRouter,DefaultBrowserFreeOfferPrompt,IsolateOrigins,site-per-process',
         '--blink-settings=imagesEnabled=false',
-        '--js-flags="--max-old-space-size=256"'
+        // No shell here, so quotes would be passed through literally and the flag ignored.
+        '--js-flags=--max-old-space-size=256',
+        '--disk-cache-size=33554432',
       ];
 
       const proxy = this.getNextProxy();
@@ -119,32 +167,103 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async createNewPage(): Promise<{ page: Page; context: any } | null> {
+  /** Close Chrome and start a fresh one, returning all of its memory to the OS. */
+  private restartBrowser(reason: string): Promise<void> {
+    if (this.restarting) return this.restarting;
+    this.restartPending = false;
+    this.logger.warn(`Restarting Puppeteer browser: ${reason}`);
+    this.restarting = (async () => {
+      const old = this.browser;
+      this.browser = null;
+      this.pagePool.length = 0;
+      await old?.close().catch(() => {});
+      await this.launchBrowser();
+    })()
+      .catch(e => this.logger.error(`Browser restart failed: ${e.message}`))
+      .finally(() => { this.restarting = null; });
+    return this.restarting.then(() => this.prewarm());
+  }
+
+  private async housekeeping() {
+    if (this.restarting) return;
+
+    // Drop pages that have sat unused in the pool, keeping the prewarmed minimum.
+    const now = Date.now();
+    for (let i = this.pagePool.length - 1; i >= 0 && this.pagePool.length > this.prewarmPages; i--) {
+      if (now - this.pagePool[i].idleSince > this.idlePageTtlMs) {
+        const [stale] = this.pagePool.splice(i, 1);
+        await stale.context.close().catch(() => {});
+      }
+    }
+
+    const usedMb = await this.browserMemoryMb();
+    if (usedMb === null || usedMb <= this.maxMemoryMb) return;
+    if (this.activePages === 0) {
+      await this.restartBrowser(`using ${usedMb}MB (limit ${this.maxMemoryMb}MB)`);
+    } else if (!this.restartPending) {
+      this.restartPending = true;
+      this.logger.warn(`Browser using ${usedMb}MB (limit ${this.maxMemoryMb}MB); restarting once ${this.activePages} active task(s) finish`);
+    }
+  }
+
+  /**
+   * Proportional memory (PSS) of Chrome and all its child processes, in MB. PM2's
+   * max_memory_restart only sees the Node process, so this is the only guard on Chrome.
+   * Linux only; returns null elsewhere.
+   */
+  private async browserMemoryMb(): Promise<number | null> {
+    const rootPid = this.browser?.process()?.pid;
+    if (!rootPid || process.platform !== 'linux') return null;
+
+    const children = new Map<number, number[]>();
+    for (const entry of await fs.readdir('/proc')) {
+      if (!/^\d+$/.test(entry)) continue;
+      try {
+        const stat = await fs.readFile(`/proc/${entry}/stat`, 'utf8');
+        // Fields after the ")" of the command name: state, ppid, ...
+        const ppid = Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1]);
+        if (!children.has(ppid)) children.set(ppid, []);
+        children.get(ppid)!.push(Number(entry));
+      } catch { /* process exited */ }
+    }
+
+    let totalKb = 0;
+    const stack = [rootPid];
+    while (stack.length) {
+      const pid = stack.pop()!;
+      stack.push(...(children.get(pid) || []));
+      try {
+        const rollup = await fs.readFile(`/proc/${pid}/smaps_rollup`, 'utf8');
+        const match = rollup.match(/^Pss:\s+(\d+)/m);
+        if (match) totalKb += Number(match[1]);
+      } catch { /* process exited */ }
+    }
+    return Math.round(totalKb / 1024);
+  }
+
+  private attachRequestBlocking(page: Page) {
+    page.on('request', (request: HTTPRequest) => {
+      const url = request.url().toLowerCase();
+      if (url.includes('.m3u8')) {
+        request.continue().catch(() => {});
+        return;
+      }
+      if (BLOCKED_RESOURCES.includes(request.resourceType()) || BLOCKED_DOMAINS.some(domain => url.includes(domain))) {
+        request.abort().catch(() => {});
+      } else {
+        request.continue().catch(() => {});
+      }
+    });
+  }
+
+  private async createNewPage(): Promise<PageObj | null> {
     try {
       await this.ensureBrowser();
       const context = await this.browser!.createBrowserContext();
       const page = await context.newPage();
 
       await page.setRequestInterception(true);
-      const blockedResources = ['image', 'stylesheet', 'font', 'manifest', 'texttrack', 'eventsource', 'websocket', 'media', 'other'];
-      const blockedDomains = [
-        'google-analytics.com', 'googletagmanager.com', 'doubleclick.net',
-        'onesignal.com', 'adsbygoogle', 'crashlytics.com', 'facebook.net'
-      ];
-
-      page.on('request', (request) => {
-        const url = request.url().toLowerCase();
-        const resourceType = request.resourceType();
-        if (url.includes('.m3u8')) {
-          request.continue();
-          return;
-        }
-        if (blockedResources.includes(resourceType) || blockedDomains.some(domain => url.includes(domain))) {
-          request.abort();
-        } else {
-          request.continue();
-        }
-      });
+      this.attachRequestBlocking(page);
 
       // 🛡️ Global Stealth & Anti-Ad settings (applied once per page)
       await page.evaluateOnNewDocument(() => {
@@ -162,24 +281,30 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
       page.setDefaultNavigationTimeout(60000);
       page.setDefaultTimeout(60000);
 
-      return { page, context };
+      return { page, context, uses: 0, idleSince: Date.now() };
     } catch (e) {
       this.logger.error(`Failed to create new page: ${e.message}`);
       return null;
     }
   }
 
+  /** Take a live page from the pool, discarding any that died (e.g. after a browser crash). */
+  private takePooledPage(): PageObj | null {
+    while (this.pagePool.length > 0) {
+      const pageObj = this.pagePool.shift()!;
+      if (!pageObj.page.isClosed()) return pageObj;
+    }
+    return null;
+  }
+
   async withPage<T>(fn: (page: Page) => Promise<T>, priority: number = 0): Promise<T> {
-    let pageObj: { page: Page; context: any } | null = null;
+    let pageObj: PageObj | null = null;
     const reservedSlots = 2; // Always keep 2 slots for priority 0 requests
     const capacityLimit = priority <= 0 ? this.maxPages : Math.max(1, this.maxPages - reservedSlots);
 
-    if (this.pagePool.length > 0 && this.activePages < capacityLimit) {
-      pageObj = this.pagePool.shift()!;
+    if (this.activePages < capacityLimit) {
       this.activePages++;
-    } else if (this.activePages < capacityLimit) {
-      this.activePages++;
-      pageObj = await this.createNewPage();
+      pageObj = this.takePooledPage() ?? await this.createNewPage();
       if (!pageObj) {
         // Creation failed — roll back the reservation. Otherwise the queue path
         // below re-increments on resolve, permanently leaking a slot (+1 per
@@ -190,7 +315,7 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
 
     if (!pageObj) {
       this.logger.debug(`Capacity reached (${this.activePages}/${this.maxPages}, limit: ${capacityLimit}). Queuing request with priority ${priority}...`);
-      pageObj = await new Promise<{ page: Page; context: any }>((resolve, reject) => {
+      pageObj = await new Promise<PageObj>((resolve, reject) => {
         this.queue.push({ priority, resolve, reject });
         this.queue.sort((a, b) => a.priority - b.priority);
       });
@@ -207,41 +332,48 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
       throw error;
     } finally {
       this.activeTasks.delete(taskRecord);
-      // Reset the page instead of closing it
-      try {
-        const { page } = pageObj;
-        if (!page.isClosed()) {
-          // Clean up listeners from the previous task
-          page.removeAllListeners('request');
-          // RE-ATTACH the blocking listener
-          page.on('request', (request) => {
-            const url = request.url().toLowerCase();
-            const resourceType = request.resourceType();
-            if (url.includes('.m3u8')) { request.continue(); return; }
-            const blockedResources = ['image', 'stylesheet', 'font', 'manifest', 'texttrack', 'eventsource', 'websocket', 'media', 'other'];
-            const blockedDomains = ['google-analytics.com', 'googletagmanager.com', 'doubleclick.net', 'onesignal.com', 'adsbygoogle', 'crashlytics.com', 'facebook.net'];
-            
-            if (blockedResources.includes(resourceType) || blockedDomains.some(domain => url.includes(domain))) {
-              request.abort().catch(() => {});
-            } else {
-              request.continue().catch(() => {});
-            }
-          });
-
-          await page.goto('about:blank');
-          const client = await (page as any).target().createCDPSession();
-          await client.send('Network.clearBrowserCookies');
-          await client.send('Network.clearBrowserCache');
-
-          this.pagePool.push(pageObj);
-        }
-      } catch (resetError: any) {
-        this.logger.warn(`Failed to reset page, closing it instead: ${resetError.message}`);
-        await pageObj.context.close().catch(() => { });
-      }
+      await this.releasePage(pageObj);
 
       this.activePages--;
+      if (this.restartPending && this.activePages === 0) {
+        // Not awaited: the caller shouldn't wait on a relaunch. Queued work waits
+        // for it in ensureBrowser().
+        void this.restartBrowser(`over ${this.maxMemoryMb}MB memory limit`);
+      }
       this.processQueue();
+    }
+  }
+
+  /** Reset a finished page and return it to the pool, or close it if it is worn out. */
+  private async releasePage(pageObj: PageObj) {
+    const { page, context } = pageObj;
+    pageObj.uses++;
+    if (page.isClosed()) return;
+    if (pageObj.uses >= this.pageMaxUses || this.restartPending) {
+      await context.close().catch(() => {});
+      return;
+    }
+
+    try {
+      // Clean up listeners from the previous task, then re-attach the blocking one.
+      page.removeAllListeners('request');
+      this.attachRequestBlocking(page);
+
+      await page.goto('about:blank');
+      const client = await page.createCDPSession();
+      try {
+        await client.send('Network.clearBrowserCookies');
+        await client.send('Network.clearBrowserCache');
+      } finally {
+        // A session per reset that is never detached accumulates in both Chrome and Node.
+        await client.detach().catch(() => {});
+      }
+
+      pageObj.idleSince = Date.now();
+      this.pagePool.push(pageObj);
+    } catch (resetError: any) {
+      this.logger.warn(`Failed to reset page, closing it instead: ${resetError.message}`);
+      await context.close().catch(() => { });
     }
   }
 
@@ -255,11 +387,7 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
     if (this.activePages < capacityLimit && (this.pagePool.length > 0 || this.activePages < this.maxPages)) {
       const { resolve, reject } = this.queue.shift()!;
 
-      let pageObj: { page: Page; context: any } | null = null;
-      if (this.pagePool.length > 0) {
-        pageObj = this.pagePool.shift()!;
-      }
-
+      const pageObj = this.takePooledPage();
       if (pageObj) {
         resolve(pageObj);
       } else {
@@ -282,7 +410,7 @@ export class PuppeteerService implements OnModuleInit, OnModuleDestroy {
 
   public abortTasksWithPriority(minPriority: number) {
     let abortedCount = 0;
-    
+
     // Clear from queue
     this.queue = this.queue.filter(item => {
       if (item.priority >= minPriority) {
